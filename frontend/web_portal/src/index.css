@@ -1,0 +1,340 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Base Color System ────────────────────────────────────────── */
+:root {
+  /* DARK MODE DEFAULTS (BLACK + HIGH-CLARITY CHARCOAL BORDERS) */
+  --bg-page: #08090c;
+  --bg-card: #121419;
+  --bg-card-hover: #181a22;
+  --bg-surface: #191c24;
+  --bg-surface-subtle: #0d0f13;
+  --border-card: #272b37;
+  --border-subtle: #1e212b;
+  --border-hover: #40475b;
+  --text-primary: #ffffff;
+  --text-secondary: #9aa2b5;
+  --text-muted: #62697b;
+  --accent-green: #22c55e;
+  --accent-green-bg: rgba(34, 197, 94, 0.12);
+  --accent-green-border: rgba(34, 197, 94, 0.32);
+  --accent-orange: #f59e0b;
+  --accent-orange-bg: rgba(245, 158, 11, 0.12);
+  --accent-orange-border: rgba(245, 158, 11, 0.32);
+  --accent-red: #ef4444;
+  --accent-red-bg: rgba(239, 68, 68, 0.12);
+  --accent-red-border: rgba(239, 68, 68, 0.32);
+  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.3);
+}
+
+html.light,
+html[data-theme="light"] {
+  /* LIGHT MODE (WHITE CARDS + VISIBLE LIGHT-GRAY BORDERS + DARK TEXT) */
+  --bg-page: #f4f5f7;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-subtle: #f8fafc;
+  --border-card: #d1d5db;
+  --border-subtle: #e5e7eb;
+  --border-hover: #9ca3af;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #6b7280;
+  --accent-green: #15803d;
+  --accent-green-bg: #ecfdf5;
+  --accent-green-border: #86efac;
+  --accent-orange: #b45309;
+  --accent-orange-bg: #fffbeb;
+  --accent-orange-border: #fde047;
+  --accent-red: #b91c1c;
+  --accent-red-bg: #fee2e2;
+  --accent-red-border: #fca5a5;
+  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+}
+
+/* ─── Global Reset & Body ──────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  background-color: var(--bg-page);
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  overflow-x: hidden;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* ─── Scrollbars ───────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-card);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ─── Reusable SHIELD & IBVAP Card Classes ──────────────────────── */
+.shield-card,
+.ibvap-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-card);
+  color: var(--text-primary);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.shield-card:hover,
+.ibvap-card:hover {
+  border-color: var(--border-hover);
+}
+
+.shield-card-nested {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.75rem;
+}
+
+.shield-card-nested:hover {
+  border-color: var(--border-card);
+}
+
+.shield-surface {
+  background-color: var(--bg-surface);
+}
+
+.shield-surface-subtle {
+  background-color: var(--bg-surface-subtle);
+}
+
+.shield-text-primary {
+  color: var(--text-primary);
+}
+
+.shield-text-secondary {
+  color: var(--text-secondary);
+}
+
+.shield-text-muted {
+  color: var(--text-muted);
+}
+
+.shield-border {
+  border-color: var(--border-card);
+}
+
+.shield-border-subtle {
+  border-color: var(--border-subtle);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-card);
+  background-color: var(--bg-surface);
+}
+
+.panel-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+
+/* ─── Semantic Status Pills ─────────────────────────────────────── */
+.shield-pill-green {
+  background-color: var(--accent-green-bg);
+  color: var(--accent-green);
+  border: 1px solid var(--accent-green-border);
+}
+
+.shield-pill-orange {
+  background-color: var(--accent-orange-bg);
+  color: var(--accent-orange);
+  border: 1px solid var(--accent-orange-border);
+}
+
+.shield-pill-red {
+  background-color: var(--accent-red-bg);
+  color: var(--accent-red);
+  border: 1px solid var(--accent-red-border);
+}
+
+/* ─── Action Buttons ────────────────────────────────────────────── */
+.ibvap-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.ibvap-btn-primary {
+  background-color: #15803d;
+  color: #ffffff;
+}
+
+.ibvap-btn-primary:hover {
+  background-color: #166534;
+}
+
+.ibvap-btn-ghost {
+  background-color: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-card);
+}
+
+.ibvap-btn-ghost:hover {
+  background-color: var(--bg-card-hover);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+.ibvap-btn-danger {
+  background-color: var(--accent-red-bg);
+  color: var(--accent-red);
+  border: 1px solid var(--accent-red-border);
+}
+
+.ibvap-btn-danger:hover {
+  background-color: rgba(239, 68, 68, 0.2);
+}
+
+/* ─── Inputs & Forms ────────────────────────────────────────────── */
+.ibvap-input {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 0.6rem;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.ibvap-input:focus {
+  border-color: #22c55e;
+}
+
+/* ─── Scanline & Overlay FX ─────────────────────────────────────── */
+.cctv-scanline {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%,
+    rgba(0, 0, 0, 0.25) 50%
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+.cctv-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at center,
+    transparent 50%,
+    rgba(0, 0, 0, 0.6) 100%
+  );
+  pointer-events: none;
+}
+
+/* ─── Keyframe Animations ───────────────────────────────────────── */
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+@keyframes bboxCritical {
+  0%, 100% { border-color: rgba(239,68,68,1); box-shadow: 0 0 10px rgba(239,68,68,0.5); }
+  50%       { border-color: rgba(239,68,68,0.3); box-shadow: none; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ─── Global Light Mode Overrides for Containers, Cards & Modals ── */
+html.light,
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+html.light .bg-\[\#121419\],
+html[data-theme="light"] .bg-\[\#121419\],
+html.light .bg-\[\#191c24\],
+html[data-theme="light"] .bg-\[\#191c24\],
+html.light .bg-\[\#141e33\],
+html[data-theme="light"] .bg-\[\#141e33\],
+html.light .bg-\[\#0a0f1d\],
+html[data-theme="light"] .bg-\[\#0a0f1d\],
+html.light .bg-\[\#0a0f1e\],
+html[data-theme="light"] .bg-\[\#0a0f1e\],
+html.light .bg-\[\#0e1626\],
+html[data-theme="light"] .bg-\[\#0e1626\],
+html.light .bg-\[\#080d1c\],
+html[data-theme="light"] .bg-\[\#080d1c\],
+html.light .bg-\[\#101726\],
+html[data-theme="light"] .bg-\[\#101726\],
+html.light .bg-\[\#141e33\]\/70,
+html[data-theme="light"] .bg-\[\#141e33\]\/70,
+html.light .bg-\[\#141e33\]\/60,
+html[data-theme="light"] .bg-\[\#141e33\]\/60,
+html.light .bg-\[\#141e33\]\/50,
+html[data-theme="light"] .bg-\[\#141e33\]\/50 {
+  background-color: #ffffff;
+}
+
+html.light .border-\[\#272b37\],
+html[data-theme="light"] .border-\[\#272b37\],
+html.light .border-\[\#1e2d4a\],
+html[data-theme="light"] .border-\[\#1e2d4a\],
+html.light .border-\[\#253a5e\],
+html[data-theme="light"] .border-\[\#253a5e\],
+html.light .border-\[\#d3d8e3\],
+html[data-theme="light"] .border-\[\#d3d8e3\],
+html.light .divide-\[\#272b37\] > :not([hidden]) ~ :not([hidden]),
+html[data-theme="light"] .divide-\[\#272b37\] > :not([hidden]) ~ :not([hidden]),
+html.light .divide-\[\#1e2d4a\] > :not([hidden]) ~ :not([hidden]),
+html[data-theme="light"] .divide-\[\#1e2d4a\] > :not([hidden]) ~ :not([hidden]) {
+  border-color: #d1d5db;
+}
+
