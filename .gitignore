@@ -1,8 +1,31 @@
 venv/
+.venv/
 node_modules/
+*/node_modules/
 .pip_cache/
 *.db
 storage/
 runs/
 datasets/
 __pycache__/
+*.py[cod]
+
+# Build outputs & packaging
+dist/
+*/dist/
+frontend/desktop/dist/
+frontend/web_portal/dist/
+
+# Logs & temp files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.tmp/
+tmp/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
