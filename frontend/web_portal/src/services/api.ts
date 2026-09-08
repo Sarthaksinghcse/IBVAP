@@ -244,7 +244,7 @@ export const testFaceMatch = (formData: FormData): Promise<TestFaceMatchResult> 
 
 // ─── ANPR Endpoints ───────────────────────────────────────────────────────────
 
-import type { ANPREvent, ANPRStats, TestANPRResult } from '../types';
+import type { ANPREvent, ANPRStats, TestANPRResult, NightVisionConfig, NightVisionStats } from '../types';
 
 export const getANPREvents = (params?: {
   camera_id?: string;
@@ -265,5 +265,16 @@ export const testANPRPlate = (formData: FormData): Promise<TestANPRResult> =>
     .then((r) => r.data);
 
 
+// ─── Night Vision Endpoints ───────────────────────────────────────────────────
 
+export const getNightVisionConfig = (): Promise<NightVisionConfig> =>
+  client.get<{ config: NightVisionConfig }>('/api/night-vision/config').then((r) => r.data.config);
 
+export const updateNightVisionConfig = (data: Partial<NightVisionConfig>): Promise<NightVisionConfig> =>
+  client.patch<{ config: NightVisionConfig }>('/api/night-vision/config', data).then((r) => r.data.config);
+
+export const resetNightVisionConfig = (): Promise<NightVisionConfig> =>
+  client.post<{ config: NightVisionConfig }>('/api/night-vision/config/reset').then((r) => r.data.config);
+
+export const getNightVisionStats = (): Promise<NightVisionStats> =>
+  client.get<NightVisionStats>('/api/night-vision/stats').then((r) => r.data);

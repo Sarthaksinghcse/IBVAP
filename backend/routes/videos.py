@@ -114,10 +114,14 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         from routes.watchlist import _load_active_watchlist_records
         from ai_engine.intelligence.face_engine import get_face_engine
         from ai_engine.intelligence.anpr_engine import get_anpr_engine
+        from ai_engine.night_vision import get_enhancer
+        from ai_engine.evidence.recorder import get_evidence_recorder
         from models.models import ANPREvent, WatchlistPlate
 
         face_engine = get_face_engine()
         anpr_engine = get_anpr_engine()
+        enhancer = get_enhancer()
+        evidence_recorder = get_evidence_recorder()
         watchlist_records = _load_active_watchlist_records(db)
 
         # Load active vehicle plate watchlist records
@@ -197,13 +201,18 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
             video_time_sec = current_frame_idx / source_fps
             frame_timestamp = wall_start + timedelta(seconds=video_time_sec)
 
-            # 1. Run real YOLOv8 inference
-            dets = detector.detect(frame, camera_id=camera_id, track=True)
+            # 1. Night Vision Pre-Inference Enhancement
+            nv = enhancer.process(frame)
+            enhanced_frame = nv.frame
+            threat_engine.update_lighting(nv.lighting)
 
-            # 2. Update persistent tracker
+            # 2. Run real YOLOv8 inference on enhanced frame
+            dets = detector.detect(enhanced_frame, camera_id=camera_id, track=True)
+
+            # 3. Update persistent tracker
             active_tracks = tracker.update(dets)
 
-            # 3. Save detection records with video timeline
+            # 4. Save detection records with video timeline
             for track in active_tracks:
                 bx, by = track.bottom_center
                 is_in_zone = threat_engine.zone_polygon.contains(Point(bx, by)) if threat_engine.zone_polygon is not None else False
@@ -212,7 +221,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                 face_match_data = None
                 if track.object_type == "PERSON" and watchlist_records:
                     face_eval = face_engine.evaluate_person_track_face(
-                        frame_bgr=frame,
+                        frame_bgr=enhanced_frame,
                         person_bbox=track.bbox,
                         camera_id=camera_id,
                         track_id=track.track_id,
@@ -228,6 +237,18 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             events_count += 1
                             alert_id_str = f"ALERT-{frame_timestamp.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
                             threat_lvl = "CRITICAL" if (is_in_zone or face_eval.get("threat_priority") == "CRITICAL") else (face_eval.get("threat_priority") or "HIGH")
+                            snap_path = evidence_recorder.record_alert_snapshot(
+                                frame_bgr=enhanced_frame,
+                                camera_id=camera_id,
+                                event_type="WATCHLIST_MATCH",
+                                threat_level=threat_lvl,
+                                bbox=track.bbox,
+                                lighting_profile=nv.lighting.profile,
+                                frame_luminance=nv.lighting.luminance,
+                                night_vision_applied=nv.applied,
+                                timestamp=frame_timestamp,
+                                object_label=f"{face_eval['person_name']} (Track #{track.track_id})",
+                            )
                             alert_rec = Alert(
                                 id=str(uuid.uuid4()),
                                 alert_id=alert_id_str,
@@ -244,6 +265,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                                 bbox_w=track.bbox.get("w", 0.0),
                                 bbox_h=track.bbox.get("h", 0.0),
                                 status="NEW",
+                                snapshot_path=snap_path,
                                 created_at=frame_timestamp,
                                 updated_at=frame_timestamp,
                             )
@@ -254,7 +276,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                 plate_info = None
                 if track.object_type == "VEHICLE":
                     plate_eval = anpr_engine.evaluate_vehicle_plate(
-                        frame_bgr=frame,
+                        frame_bgr=enhanced_frame,
                         vehicle_bbox=track.bbox,
                         camera_id=camera_id,
                         track_id=track.track_id,
@@ -296,6 +318,18 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             if normalized_search in watchlist_plate_map:
                                 wl_plate = watchlist_plate_map[normalized_search]
                                 alert_id_str = f"ALERT-{frame_timestamp.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+                                snap_p = evidence_recorder.record_alert_snapshot(
+                                    frame_bgr=enhanced_frame,
+                                    camera_id=camera_id,
+                                    event_type="WATCHLIST_PLATE_MATCH",
+                                    threat_level=wl_plate.threat_priority or "HIGH",
+                                    bbox=track.bbox,
+                                    lighting_profile=nv.lighting.profile,
+                                    frame_luminance=nv.lighting.luminance,
+                                    night_vision_applied=nv.applied,
+                                    timestamp=frame_timestamp,
+                                    object_label=f"{track.object_label} (Plate: {p_text})",
+                                )
                                 alert_rec = Alert(
                                     id=str(uuid.uuid4()),
                                     alert_id=alert_id_str,
@@ -312,6 +346,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                                     bbox_w=track.bbox.get("w", 0.0),
                                     bbox_h=track.bbox.get("h", 0.0),
                                     status="NEW",
+                                    snapshot_path=snap_p,
                                     created_at=frame_timestamp,
                                     updated_at=frame_timestamp,
                                 )
@@ -412,6 +447,9 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                     plate_bbox_y          = p_box.get("y") if p_box else None,
                     plate_bbox_w          = p_box.get("w") if p_box else None,
                     plate_bbox_h          = p_box.get("h") if p_box else None,
+                    night_vision_applied  = nv.applied,
+                    frame_luminance       = round(nv.lighting.luminance, 2),
+                    lighting_profile      = nv.lighting.profile,
                 )
                 db.add(det_rec)
                 total_detections_count += 1
@@ -423,6 +461,19 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                         alerted_tracks.add(track.track_id)
                         events_count += 1
                         alert_id_str = f"ALERT-{frame_timestamp.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+                        threat_lvl = "HIGH" if track.object_type == "PERSON" else "CRITICAL"
+                        snap_p = evidence_recorder.record_alert_snapshot(
+                            frame_bgr=enhanced_frame,
+                            camera_id=camera_id,
+                            event_type="ZONE_INTRUSION",
+                            threat_level=threat_lvl,
+                            bbox=track.bbox,
+                            lighting_profile=nv.lighting.profile,
+                            frame_luminance=nv.lighting.luminance,
+                            night_vision_applied=nv.applied,
+                            timestamp=frame_timestamp,
+                            object_label=track.object_label,
+                        )
                         alert_rec = Alert(
                             id=str(uuid.uuid4()),
                             alert_id=alert_id_str,
@@ -431,7 +482,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             event_type="ZONE_INTRUSION",
                             object_type=track.object_type,
                             object_id=track.object_label,
-                            threat_level="HIGH" if track.object_type == "PERSON" else "CRITICAL",
+                            threat_level=threat_lvl,
                             reason=f"{track.object_label} entered {threat_engine.zone_name} in uploaded video at T+{video_time_sec:.1f}s.",
                             confidence=round(track.confidence, 1),
                             bbox_x=track.bbox.get("x", 0.0),
@@ -439,6 +490,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             bbox_w=track.bbox.get("w", 0.0),
                             bbox_h=track.bbox.get("h", 0.0),
                             status="NEW",
+                            snapshot_path=snap_p,
                             created_at=frame_timestamp,
                             updated_at=frame_timestamp,
                         )
@@ -451,6 +503,18 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                         alerted_tracks.add(loiter_key)
                         events_count += 1
                         alert_id_str = f"ALERT-{frame_timestamp.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+                        snap_p = evidence_recorder.record_alert_snapshot(
+                            frame_bgr=enhanced_frame,
+                            camera_id=camera_id,
+                            event_type="LOITERING",
+                            threat_level="CRITICAL",
+                            bbox=track.bbox,
+                            lighting_profile=nv.lighting.profile,
+                            frame_luminance=nv.lighting.luminance,
+                            night_vision_applied=nv.applied,
+                            timestamp=frame_timestamp,
+                            object_label=track.object_label,
+                        )
                         alert_rec = Alert(
                             id=str(uuid.uuid4()),
                             alert_id=alert_id_str,
@@ -467,6 +531,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             bbox_w=track.bbox.get("w", 0.0),
                             bbox_h=track.bbox.get("h", 0.0),
                             status="NEW",
+                            snapshot_path=snap_p,
                             created_at=frame_timestamp,
                             updated_at=frame_timestamp,
                         )

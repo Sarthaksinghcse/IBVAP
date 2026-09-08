@@ -84,6 +84,11 @@ class Detection(Base):
     plate_bbox_w          = Column(Float,   nullable=True)
     plate_bbox_h          = Column(Float,   nullable=True)
 
+    # ── Night Vision Provenance (Real Low-Light Measurement & Enhancement) ──
+    night_vision_applied  = Column(Boolean, default=False)
+    frame_luminance       = Column(Float,   nullable=True)
+    lighting_profile      = Column(String,  nullable=True)  # DAY | DUSK | NIGHT | EXTREME_LOW
+
     camera = relationship("Camera", back_populates="detections")
     video  = relationship("Video",  back_populates="detections")
 

@@ -283,12 +283,26 @@ export interface TestANPRResult {
   plate_detected: boolean;
   plate_text?: string | null;
   plate_confidence?: number | null;
-  plate_status: string;
-  cleaned_text?: string | null;
   message: string;
 }
 
+export interface NightVisionConfig {
+  mode: 'AUTO' | 'ALWAYS' | 'OFF';
+  dusk_threshold: number;
+  night_threshold: number;
+  extreme_low_threshold?: number;
+  clahe_clip_dusk: number;
+  clahe_clip_night: number;
+  gamma_night: number;
+  denoise_enabled: boolean;
+  sharpen_enabled: boolean;
+  hysteresis_margin: number;
+}
 
-
-
-
+export interface NightVisionStats {
+  total_detections: number;
+  enhanced_detections: number;
+  enhanced_percentage: number;
+  profile_breakdown: Record<string, number>;
+  active_mode: string;
+}

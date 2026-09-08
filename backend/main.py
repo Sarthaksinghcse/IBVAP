@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database.init_db import init_db
-from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr
+from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr, night_vision
 from websocket.manager import router as ws_router
 
 
@@ -79,6 +79,7 @@ app.include_router(alerts.router,     prefix="/api/alerts",     tags=["Alerts"])
 app.include_router(analytics.router,  prefix="/api/analytics",  tags=["Analytics"])
 app.include_router(zones.router,      prefix="/api/zones",      tags=["Zones"])
 app.include_router(watchlist.router,  prefix="/api/watchlist",  tags=["Watchlist"])
+app.include_router(night_vision.router, prefix="/api/night-vision", tags=["Night Vision"])
 app.include_router(anpr.router,       tags=["ANPR"])
 app.include_router(ws_router)
 

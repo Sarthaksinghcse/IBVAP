@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from enum import Enum
 
@@ -148,6 +148,9 @@ class DetectionCreate(BaseModel):
     frame_index:           Optional[int]   = None
     video_time_sec:        Optional[float] = None
     plate_info:            Optional[PlateInfoSchema] = None
+    night_vision_applied:  Optional[bool]  = False
+    frame_luminance:       Optional[float] = None
+    lighting_profile:      Optional[str]   = None
 
 class DetectionResponse(BaseModel):
     id:                    str
@@ -166,6 +169,9 @@ class DetectionResponse(BaseModel):
     frame_index:           Optional[int]   = None
     video_time_sec:        Optional[float] = None
     plate_info:            Optional[PlateInfoSchema] = None
+    night_vision_applied:  Optional[bool]  = False
+    frame_luminance:       Optional[float] = None
+    lighting_profile:      Optional[str]   = None
 
     model_config = {"from_attributes": True}
 
@@ -389,6 +395,63 @@ class TestANPRResponse(BaseModel):
     plate_status:     str
     cleaned_text:     Optional[str]   = None
     message:          str
+
+
+# ─── Night Vision Schemas ─────────────────────────────────────────────────────
+
+class NightVisionConfigSchema(BaseModel):
+    mode: str
+    dusk_threshold: float
+    night_threshold: float
+    extreme_low_threshold: float
+    hysteresis_margin: float
+    luminance_sample_interval: int
+    luminance_downscale: int
+    clahe_tile_grid: int
+    clahe_clip_dusk: float
+    clahe_clip_night: float
+    clahe_clip_extreme: float
+    gamma_dusk: float
+    gamma_night: float
+    gamma_extreme: float
+    denoise_enabled: bool
+    denoise_method: str
+    bilateral_diameter: int
+    bilateral_sigma_color: float
+    bilateral_sigma_space: float
+    denoise_min_profile: str
+    sharpen_enabled: bool
+    sharpen_amount: float
+    sharpen_blur_sigma: float
+    slow_frame_warn_ms: float
+
+class NightVisionConfigUpdate(BaseModel):
+    mode:                      Optional[str]   = None
+    dusk_threshold:            Optional[float] = None
+    night_threshold:           Optional[float] = None
+    extreme_low_threshold:     Optional[float] = None
+    hysteresis_margin:         Optional[float] = None
+    clahe_clip_dusk:           Optional[float] = None
+    clahe_clip_night:          Optional[float] = None
+    clahe_clip_extreme:        Optional[float] = None
+    gamma_dusk:                Optional[float] = None
+    gamma_night:               Optional[float] = None
+    gamma_extreme:             Optional[float] = None
+    denoise_enabled:           Optional[bool]  = None
+    denoise_method:            Optional[str]   = None
+    bilateral_diameter:        Optional[int]   = None
+    bilateral_sigma_color:     Optional[float] = None
+    bilateral_sigma_space:     Optional[float] = None
+    sharpen_enabled:           Optional[bool]  = None
+    sharpen_amount:            Optional[float] = None
+
+class NightVisionStatsResponse(BaseModel):
+    total_detections:          int
+    enhanced_detections:       int
+    enhanced_percentage:       float
+    profile_breakdown:         Dict[str, int]
+    active_mode:               str
+
 
 
 

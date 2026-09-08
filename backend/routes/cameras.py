@@ -256,6 +256,8 @@ async def get_camera_mjpeg_stream(camera_id: str, db: Session = Depends(get_db))
     def frame_generator():
         cap = cv2.VideoCapture(cam.stream_url)
         detector, tracker, threat_engine = _get_webcam_ai_instances()
+        from ai_engine.night_vision import get_enhancer
+        enhancer = get_enhancer()
         try:
             while True:
                 ret, frame = cap.read()
@@ -263,23 +265,28 @@ async def get_camera_mjpeg_stream(camera_id: str, db: Session = Depends(get_db))
                     time.sleep(0.1)
                     continue
 
-                # Run inference periodically
-                raw_dets = detector.detect(frame, camera_id=camera_id, track=True)
-                active_tracks = tracker.update(raw_dets)
-                threat_engine.process_tracks(active_tracks)
+                # Run Night Vision Enhancement
+                nv = enhancer.process(frame)
+                enhanced_frame = nv.frame
+                threat_engine.update_lighting(nv.lighting)
 
-                # Draw bounding boxes onto frame
+                # Run inference periodically
+                raw_dets = detector.detect(enhanced_frame, camera_id=camera_id, track=True)
+                active_tracks = tracker.update(raw_dets)
+                threat_engine.process_tracks(active_tracks, frame_bgr=enhanced_frame, frame_lighting=nv.lighting)
+
+                # Draw bounding boxes onto enhanced frame (enhanced frame is also what streams)
                 for trk in active_tracks:
                     x1, y1, x2, y2 = trk.bbox["x"], trk.bbox["y"], trk.bbox["w"], trk.bbox["h"]
-                    h_f, w_f = frame.shape[:2]
+                    h_f, w_f = enhanced_frame.shape[:2]
                     px1 = int((x1 / 100.0) * w_f)
                     py1 = int((y1 / 100.0) * h_f)
                     pw = int((x2 / 100.0) * w_f)
                     ph = int((y2 / 100.0) * h_f)
-                    cv2.rectangle(frame, (px1, py1), (px1 + pw, py1 + ph), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{trk.object_label} {trk.confidence:.0f}%", (px1, max(15, py1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    cv2.rectangle(enhanced_frame, (px1, py1), (px1 + pw, py1 + ph), (0, 255, 0), 2)
+                    cv2.putText(enhanced_frame, f"{trk.object_label} {trk.confidence:.0f}%", (px1, max(15, py1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                ret_enc, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                ret_enc, jpeg = cv2.imencode('.jpg', enhanced_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if not ret_enc:
                     continue
 
@@ -375,8 +382,15 @@ async def infer_webcam_frame(data: WebcamInferRequest):
         if frame is None or frame.size == 0:
             return {"detections": [], "frame_seq": data.frame_seq, "camera_id": data.camera_id}
 
-        # ── Run real YOLOv8 with internal tracking (persist=True) ─────────────
-        raw_dets = detector.detect(frame, camera_id=data.camera_id, track=True)
+        # ── Run Night Vision Pre-Inference Enhancement ─────────────────────────
+        from ai_engine.night_vision import get_enhancer
+        enhancer = get_enhancer()
+        nv = enhancer.process(frame)
+        enhanced_frame = nv.frame
+        threat_engine.update_lighting(nv.lighting)
+
+        # ── Run real YOLOv8 with internal tracking (persist=True) on enhanced frame ──
+        raw_dets = detector.detect(enhanced_frame, camera_id=data.camera_id, track=True)
 
         if not raw_dets:
             # No objects detected this frame — return empty (clear previous boxes)
@@ -389,7 +403,12 @@ async def infer_webcam_frame(data: WebcamInferRequest):
         import asyncio
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, lambda: threat_engine.process_tracks(active_tracks, video_id=None)
+            None, lambda: threat_engine.process_tracks(
+                active_tracks,
+                video_id=None,
+                frame_bgr=enhanced_frame,
+                frame_lighting=nv.lighting
+            )
         )
 
         # ── Build detection response & AI Evaluation ─────────────────────────
@@ -411,7 +430,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
             face_match_info = None
             if data.face_recognition_enabled and track.object_type == "PERSON":
                 face_eval = face_engine.evaluate_person_track_face(
-                    frame_bgr=frame,
+                    frame_bgr=enhanced_frame,
                     person_bbox=track.bbox,
                     camera_id=data.camera_id,
                     track_id=track.track_id,
@@ -438,7 +457,8 @@ async def infer_webcam_frame(data: WebcamInferRequest):
                         cosine_score=face_eval["cosine_score"],
                         track_id=track.track_id,
                         bbox=track.bbox,
-                        is_in_zone=is_in_zone
+                        is_in_zone=is_in_zone,
+                        frame_bgr=enhanced_frame
                     )
                 elif face_eval.get("face_detected"):
                     face_match_info = {
@@ -451,7 +471,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
             plate_info = None
             if data.anpr_enabled and track.object_type == "VEHICLE":
                 plate_eval = anpr_engine.evaluate_vehicle_plate(
-                    frame_bgr=frame,
+                    frame_bgr=enhanced_frame,
                     vehicle_bbox=track.bbox,
                     camera_id=data.camera_id,
                     track_id=track.track_id,

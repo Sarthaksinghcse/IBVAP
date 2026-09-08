@@ -1,7 +1,14 @@
-import { Save, Info } from 'lucide-react';
+import { Save, Info, Moon, Sliders, RotateCcw } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useState, useEffect } from 'react';
 import { ZoneEditorModal } from '../components/monitoring/ZoneEditorModal';
+import {
+  getNightVisionConfig,
+  updateNightVisionConfig,
+  resetNightVisionConfig,
+  getNightVisionStats,
+} from '../services/api';
+import type { NightVisionConfig, NightVisionStats } from '../types';
 
 interface SettingRowProps {
   label: string;
@@ -57,10 +64,53 @@ export default function Settings() {
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [editingZoneSource, setEditingZoneSource] = useState<{ id: string; name: string; type: 'CAMERA' | 'WEBCAM' } | null>(null);
 
+  // Night Vision state
+  const [nvConfig, setNvConfig] = useState<NightVisionConfig>({
+    mode: 'AUTO',
+    dusk_threshold: 110.0,
+    night_threshold: 70.0,
+    clahe_clip_dusk: 1.8,
+    clahe_clip_night: 2.5,
+    gamma_night: 1.35,
+    denoise_enabled: true,
+    sharpen_enabled: true,
+    hysteresis_margin: 12.0,
+  });
+  const [nvStats, setNvStats] = useState<NightVisionStats | null>(null);
+  const [nvMsg, setNvMsg] = useState<string | null>(null);
+
   useEffect(() => {
     fetchZones();
     fetchCameras();
+    // Load Night Vision settings and stats
+    getNightVisionConfig().then(setNvConfig).catch(() => {});
+    getNightVisionStats().then(setNvStats).catch(() => {});
   }, [fetchZones, fetchCameras]);
+
+  const handleNvConfigChange = async (updates: Partial<NightVisionConfig>) => {
+    try {
+      const updated = await updateNightVisionConfig(updates);
+      setNvConfig(updated);
+      setNvMsg('Night vision configuration updated');
+      setTimeout(() => setNvMsg(null), 3000);
+      const stats = await getNightVisionStats();
+      setNvStats(stats);
+    } catch (err) {
+      console.error('Failed to update night vision config:', err);
+    }
+  };
+
+  const handleNvReset = async () => {
+    try {
+      const reset = await resetNightVisionConfig();
+      setNvConfig(reset);
+      setNvMsg('Night vision reset to tuned defaults');
+      setTimeout(() => setNvMsg(null), 3000);
+    } catch (err) {
+      console.error('Failed to reset night vision config:', err);
+    }
+  };
+
 
   const handleSave = () => {
     setSavedSuccess(true);
@@ -164,6 +214,162 @@ export default function Settings() {
             onChange={(v) => updateSetting('anprEnabled', v)}
           />
         </SettingRow>
+      </div>
+
+      {/* Night Vision & Low-Light Enhancement Settings */}
+      <div className="bg-[#121419] light:bg-white border border-[#272b37] light:border-[#d3d8e3] rounded-2xl p-5 shadow-card transition-colors">
+        <div className="flex items-center justify-between pb-3 border-b border-[#272b37] light:border-[#d3d8e3]">
+          <div className="flex items-center gap-2">
+            <Moon size={16} className="text-cyan-400" />
+            <div>
+              <h3 className="text-sm font-bold text-white light:text-slate-900">
+                Night Vision & Low-Light Enhancement
+              </h3>
+              <p className="text-xs text-[#9aa2b5] light:text-slate-500 mt-0.5">
+                Zero-hardware low-light frame enhancement using CIELAB CLAHE, adaptive gamma, bilateral denoising, and unsharp masking.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleNvReset}
+            className="flex items-center gap-1 text-xs font-mono px-2.5 py-1 rounded-lg bg-[#191c24] hover:bg-slate-700 text-slate-300 border border-[#272b37] transition cursor-pointer"
+            title="Reset Night Vision parameters to tuned defaults"
+          >
+            <RotateCcw size={12} />
+            Reset Defaults
+          </button>
+        </div>
+
+        {nvMsg && (
+          <div className="mt-3 p-2 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-xs text-cyan-300 font-mono">
+            ✓ {nvMsg}
+          </div>
+        )}
+
+        <SettingRow
+          label="Enhancement Mode"
+          description="AUTO activates low-light enhancement dynamically based on measured frame luminance."
+        >
+          <div className="flex rounded-lg bg-[#191c24] p-1 border border-[#272b37]">
+            {(['AUTO', 'ALWAYS', 'OFF'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => handleNvConfigChange({ mode: m })}
+                className={`px-3 py-1 text-xs font-mono font-bold rounded-md transition ${
+                  nvConfig.mode === m
+                    ? 'bg-cyan-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </SettingRow>
+
+        <SettingRow
+          label="Dusk Luminance Threshold (L*)"
+          description={`Frames with mean luminance below ${nvConfig.dusk_threshold.toFixed(0)} enter DUSK enhancement profile.`}
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={80}
+              max={150}
+              step={1}
+              value={nvConfig.dusk_threshold}
+              onChange={(e) => handleNvConfigChange({ dusk_threshold: Number(e.target.value) })}
+              className="w-28 accent-cyan-400"
+            />
+            <span className="text-xs font-mono font-bold text-cyan-400 w-10">
+              {nvConfig.dusk_threshold.toFixed(0)}
+            </span>
+          </div>
+        </SettingRow>
+
+        <SettingRow
+          label="Night Luminance Threshold (L*)"
+          description={`Frames with mean luminance below ${nvConfig.night_threshold.toFixed(0)} enter NIGHT enhancement profile (gamma + CLAHE).`}
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={30}
+              max={90}
+              step={1}
+              value={nvConfig.night_threshold}
+              onChange={(e) => handleNvConfigChange({ night_threshold: Number(e.target.value) })}
+              className="w-28 accent-cyan-400"
+            />
+            <span className="text-xs font-mono font-bold text-cyan-400 w-10">
+              {nvConfig.night_threshold.toFixed(0)}
+            </span>
+          </div>
+        </SettingRow>
+
+        <SettingRow
+          label="Night CLAHE Clip Limit"
+          description={`Contrast limit for L* channel histogram equalization under night conditions (currently: ${nvConfig.clahe_clip_night?.toFixed(1) ?? '2.5'}).`}
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={1.0}
+              max={4.0}
+              step={0.1}
+              value={nvConfig.clahe_clip_night ?? 2.5}
+              onChange={(e) => handleNvConfigChange({ clahe_clip_night: Number(e.target.value) })}
+              className="w-28 accent-cyan-400"
+            />
+            <span className="text-xs font-mono font-bold text-cyan-400 w-10">
+              {(nvConfig.clahe_clip_night ?? 2.5).toFixed(1)}
+            </span>
+          </div>
+        </SettingRow>
+
+        <SettingRow
+          label="Bilateral Denoising (d=9, σ=75)"
+          description="Edge-preserving color smoothing to suppress camera sensor noise amplified by contrast stretch."
+        >
+          <Toggle
+            value={nvConfig.denoise_enabled ?? true}
+            onChange={(v) => handleNvConfigChange({ denoise_enabled: v })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Unsharp Masking (0.25 weight)"
+          description="Gentle edge sharpening to restore high-frequency boundary details for object detection."
+        >
+          <Toggle
+            value={nvConfig.sharpen_enabled ?? true}
+            onChange={(v) => handleNvConfigChange({ sharpen_enabled: v })}
+          />
+        </SettingRow>
+
+        {/* Telemetry Footer */}
+        {nvStats && (
+          <div className="mt-4 pt-3 border-t border-[#272b37] grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="bg-[#191c24] p-2 rounded-xl text-center">
+              <span className="text-[10px] text-slate-400 uppercase font-mono block">Active Mode</span>
+              <span className="text-xs font-mono font-bold text-cyan-400">{nvStats.active_mode}</span>
+            </div>
+            <div className="bg-[#191c24] p-2 rounded-xl text-center">
+              <span className="text-[10px] text-slate-400 uppercase font-mono block">Total Detections</span>
+              <span className="text-xs font-mono font-bold text-white">{nvStats.total_detections}</span>
+            </div>
+            <div className="bg-[#191c24] p-2 rounded-xl text-center">
+              <span className="text-[10px] text-slate-400 uppercase font-mono block">Night-Enhanced</span>
+              <span className="text-xs font-mono font-bold text-emerald-400">{nvStats.enhanced_detections}</span>
+            </div>
+            <div className="bg-[#191c24] p-2 rounded-xl text-center">
+              <span className="text-[10px] text-slate-400 uppercase font-mono block">Enhance Rate</span>
+              <span className="text-xs font-mono font-bold text-amber-400">{nvStats.enhanced_percentage.toFixed(1)}%</span>
+            </div>
+          </div>
+        )}
       </div>
 
 

@@ -60,6 +60,8 @@ class ThreatEngine:
         self.highest_threat_sent: Dict[int, str] = {}
         # track_id -> loitering_alert_fired (bool)
         self.loitering_alert_fired: Dict[int, bool] = {}
+        # Current lighting state measured by NightVision layer
+        self.current_lighting = None
 
         logger.info(
             f"[ThreatEngine] Initialized for {camera_id} | "
@@ -85,13 +87,37 @@ class ThreatEngine:
             self.zone_polygon = None
             self.zone_name = None
 
+    def update_lighting(self, lighting: Optional[object] = None):
+        """Update current measured scene lighting from the night vision layer."""
+        self.current_lighting = lighting
+
+    def _assess_darkness(self, lighting: Optional[object] = None) -> Tuple[bool, str]:
+        """
+        Assess scene darkness using measured luminance if available,
+        falling back to system clock hour if no measurement is provided.
+        Preserves platform explainability by returning the basis for the decision.
+        """
+        eff_lighting = lighting or self.current_lighting
+        if eff_lighting is not None and hasattr(eff_lighting, "luminance"):
+            lum = float(eff_lighting.luminance)
+            prof = getattr(eff_lighting, "profile", "UNKNOWN")
+            is_dark = prof in ("NIGHT", "EXTREME_LOW") or lum < 70.0
+            basis = f"measured scene luminance {lum:.1f} ({prof})"
+            return is_dark, basis
+
+        from datetime import datetime
+        current_hour = datetime.now().hour
+        is_dark = (current_hour >= 22 or current_hour < 6)
+        basis = f"system clock hour {current_hour:02d}:00 (no light measurement available)"
+        return is_dark, basis
 
     def correlate_threat(
         self,
         track: TrackedObject,
         is_in_zone: bool,
         is_loitering: bool,
-        video_id: Optional[str]
+        video_id: Optional[str],
+        lighting: Optional[object] = None
     ) -> Tuple[str, str, str, dict]:
         """
         SIH Differentiator 1: Threat-Correlation Engine
@@ -99,18 +125,20 @@ class ThreatEngine:
         and persistence into a single explainable threat assessment (NONE/LOW/MEDIUM/HIGH/CRITICAL)
         with stated evidence.
         """
-        from datetime import datetime
         source_label = f"VIDEO {video_id}" if video_id else self.camera_id
-        current_hour = datetime.now().hour
-        is_night = (current_hour >= 22 or current_hour < 6)
-        time_desc = "nighttime surveillance (high sensitivity)" if is_night else "daytime monitoring"
+        is_night, darkness_basis = self._assess_darkness(lighting)
+        time_desc = f"nighttime surveillance ({darkness_basis})" if is_night else f"daytime monitoring ({darkness_basis})"
 
+        eff_lighting = lighting or self.current_lighting
         evidence = {
             "in_zone": is_in_zone,
             "zone_name": self.zone_name if is_in_zone else None,
             "dwell_sec": int(track.zone_dwell_time) if is_in_zone else int(track.dwell_time),
             "confidence": round(track.confidence, 1),
             "is_night": is_night,
+            "darkness_basis": darkness_basis,
+            "lighting_profile": getattr(eff_lighting, "profile", None) if eff_lighting else None,
+            "frame_luminance": round(getattr(eff_lighting, "luminance", 0.0), 1) if eff_lighting and hasattr(eff_lighting, "luminance") else None,
             "frames_tracked": track.frame_count,
         }
 
@@ -155,11 +183,20 @@ class ThreatEngine:
 
         return "OBJECT_DETECTED", "NONE", f"{track.object_label} observed at {source_label}.", evidence
 
-    def process_tracks(self, tracks: List[TrackedObject], video_id: Optional[str] = None, frame_bgr: Optional[object] = None) -> List[dict]:
+    def process_tracks(
+        self,
+        tracks: List[TrackedObject],
+        video_id: Optional[str] = None,
+        frame_bgr: Optional[object] = None,
+        frame_lighting: Optional[object] = None
+    ) -> List[dict]:
         """
         Evaluate all currently active tracks in the frame using the Threat-Correlation Engine.
         Generates detection events and dispatches alerts when correlated threat conditions are met.
         """
+        if frame_lighting is not None:
+            self.update_lighting(frame_lighting)
+
         current_time = time.time()
         processed_detections = []
 
@@ -201,7 +238,8 @@ class ThreatEngine:
                 track=track,
                 is_in_zone=is_in_zone,
                 is_loitering=is_loitering,
-                video_id=video_id
+                video_id=video_id,
+                lighting=self.current_lighting
             )
 
             # If plate is detected, reflect in event_type if not higher-priority zone intrusion
@@ -240,8 +278,28 @@ class ThreatEngine:
                     current_time=current_time
                 )
 
-
                 if should_alert:
+                    # Capture forensic evidence snapshot on HIGH/CRITICAL alerts
+                    snapshot_path = None
+                    if frame_bgr is not None:
+                        try:
+                            from ai_engine.evidence.recorder import get_evidence_recorder
+                            recorder = get_evidence_recorder()
+                            eff_light = self.current_lighting
+                            snapshot_path = recorder.record_alert_snapshot(
+                                frame_bgr=frame_bgr,
+                                camera_id=self.camera_id,
+                                event_type=event_type,
+                                threat_level=threat_level,
+                                bbox=track.bbox,
+                                lighting_profile=getattr(eff_light, "profile", None) if eff_light else None,
+                                frame_luminance=getattr(eff_light, "luminance", None) if eff_light else None,
+                                night_vision_applied=(getattr(eff_light, "profile", "") in ("DUSK", "NIGHT", "EXTREME_LOW")) if eff_light else None,
+                                object_label=track.object_label,
+                            )
+                        except Exception as snap_err:
+                            logger.error(f"[ThreatEngine] Evidence snapshot capture error: {snap_err}")
+
                     alert_payload = {
                         "camera_id": self.camera_id,
                         "video_id": video_id,
@@ -252,6 +310,7 @@ class ThreatEngine:
                         "reason": reason,
                         "confidence": round(track.confidence, 1),
                         "bbox": track.bbox,
+                        "snapshot_path": snapshot_path,
                     }
                     if self.alert_callback:
                         try:
@@ -305,7 +364,8 @@ class ThreatEngine:
         track_id: Optional[int],
         bbox: dict,
         is_in_zone: bool = False,
-        video_id: Optional[str] = None
+        video_id: Optional[str] = None,
+        frame_bgr: Optional[object] = None
     ) -> bool:
         """
         Processes a confirmed real Watchlist Match from the FaceEngine.
@@ -357,6 +417,26 @@ class ThreatEngine:
                 f"with {similarity:.1f}% face match confidence."
             )
 
+        snapshot_path = None
+        if frame_bgr is not None and threat_level in ["HIGH", "CRITICAL"]:
+            try:
+                from ai_engine.evidence.recorder import get_evidence_recorder
+                recorder = get_evidence_recorder()
+                eff_light = self.current_lighting
+                snapshot_path = recorder.record_alert_snapshot(
+                    frame_bgr=frame_bgr,
+                    camera_id=self.camera_id,
+                    event_type="WATCHLIST_MATCH",
+                    threat_level=threat_level,
+                    bbox=bbox,
+                    lighting_profile=getattr(eff_light, "profile", None) if eff_light else None,
+                    frame_luminance=getattr(eff_light, "luminance", None) if eff_light else None,
+                    night_vision_applied=(getattr(eff_light, "profile", "") in ("DUSK", "NIGHT", "EXTREME_LOW")) if eff_light else None,
+                    object_label=f"{person_name} (Watchlist)",
+                )
+            except Exception as snap_err:
+                logger.error(f"[ThreatEngine] Watchlist snapshot capture error: {snap_err}")
+
         alert_payload = {
             "camera_id": self.camera_id,
             "video_id": video_id,
@@ -367,6 +447,7 @@ class ThreatEngine:
             "reason": reason,
             "confidence": similarity,
             "bbox": bbox,
+            "snapshot_path": snapshot_path,
         }
 
         if self.alert_callback:

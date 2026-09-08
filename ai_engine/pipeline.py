@@ -22,6 +22,7 @@ import cv2
 from ai_engine.detection.detector import Detector
 from ai_engine.tracking.tracker import Tracker
 from ai_engine.intelligence.threat_engine import ThreatEngine
+from ai_engine.night_vision import NightVisionEnhancer, NightVisionConfig, VALID_MODES, MODE_AUTO
 
 # Configure Logging
 logging.basicConfig(
@@ -47,7 +48,8 @@ class IBVAPPipeline:
         loitering_threshold: float = 15.0,  # 15s prototype threshold
         model_path: str = "E:/IBVAP/models/yolov8n.pt",
         throttle_fps: Optional[float] = 30.0,
-        loop_video: bool = False
+        loop_video: bool = False,
+        night_vision_mode: str = "AUTO"
     ):
         self.camera_id = camera_id
         self.source = source
@@ -63,7 +65,11 @@ class IBVAPPipeline:
         logger.info(f"║  Source:         {str(self.source):<46}║")
         logger.info(f"║  Backend Hub:    {self.backend_url:<46}║")
         logger.info(f"║  Loiter Limit:   {str(loitering_threshold) + 's':<46}║")
+        logger.info(f"║  Night Vision:   {night_vision_mode:<46}║")
         logger.info(f"╚════════════════════════════════════════════════════════════════╝")
+
+        # Night vision runs ahead of detection so YOLO sees an enhanced frame.
+        self.enhancer = NightVisionEnhancer(NightVisionConfig(mode=night_vision_mode))
 
         # Initialize Subsystems
         self.detector = Detector(model_path=model_path, conf_threshold=conf_threshold)
@@ -101,6 +107,7 @@ class IBVAPPipeline:
         target_frame_delay = 1.0 / (self.throttle_fps or native_fps) if self.throttle_fps else 0.0
         start_time = time.time()
         processed_count = 0
+        last_profile = None  # tracks night-vision profile changes for logging
 
         try:
             while True:
@@ -119,16 +126,35 @@ class IBVAPPipeline:
                 frame_idx += 1
                 processed_count += 1
 
-                # 1. Run YOLOv8 Detection & Tracking
-                detections = self.detector.detect(frame, camera_id=self.camera_id, track=True)
+                # 1. Night Vision — enhance low-light frames before inference.
+                nv = self.enhancer.process(frame)
+                enhanced_frame = nv.frame
 
-                # 2. Update Persistent Track Objects
+                if nv.applied and last_profile != nv.lighting.profile:
+                    logger.info(
+                        f"[NightVision] Lighting profile -> {nv.lighting.profile} "
+                        f"(luminance {nv.lighting.luminance:.1f}). {nv.reason}"
+                    )
+                    last_profile = nv.lighting.profile
+                elif not nv.applied and last_profile is not None:
+                    logger.info(f"[NightVision] {nv.reason}")
+                    last_profile = None
+
+                # 2. Run YOLOv8 Detection & Tracking on enhanced frame
+                detections = self.detector.detect(enhanced_frame, camera_id=self.camera_id, track=True)
+
+                # 3. Update Persistent Track Objects
                 active_tracks = self.tracker.update(detections)
 
-                # 3. Threat Engine Analysis & Event Dispatching
-                processed_dets = self.threat_engine.process_tracks(active_tracks, video_id=self.video_id, frame_bgr=frame)
+                # 4. Threat Engine Analysis & Event Dispatching
+                processed_dets = self.threat_engine.process_tracks(
+                    active_tracks,
+                    video_id=self.video_id,
+                    frame_bgr=enhanced_frame,
+                    frame_lighting=nv.lighting
+                )
 
-                # 4. Performance & Telemetry Reporting
+                # 5. Performance & Telemetry Reporting
                 elapsed = time.time() - start_time
                 curr_fps = processed_count / elapsed if elapsed > 0 else 0.0
 
@@ -145,7 +171,7 @@ class IBVAPPipeline:
                         f"Active Tracks: {len(active_tracks)} | Zone A: {zone_count}"
                     )
 
-                # 5. Throttle loop if pacing is desired
+                # 6. Throttle loop if pacing is desired
                 if target_frame_delay > 0:
                     process_time = time.time() - loop_start
                     delay = target_frame_delay - process_time
@@ -157,20 +183,33 @@ class IBVAPPipeline:
         finally:
             cap.release()
             total_time = time.time() - start_time
-            logger.info(f"[Pipeline] Processing Complete. Processed {processed_count} frames in {total_time:.2f}s ({processed_count/total_time:.1f} avg FPS).")
+            avg_fps = processed_count / total_time if total_time > 0 else 0.0
+            logger.info(f"[Pipeline] Processing Complete. Processed {processed_count} frames in {total_time:.2f}s ({avg_fps:.1f} avg FPS).")
+            nv_stats = self.enhancer.stats()
+            logger.info(
+                f"[NightVision] Enhanced {nv_stats['frames_enhanced']}/{nv_stats['frames_seen']} frames "
+                f"({nv_stats['enhancement_rate']:.1%}) at {nv_stats['avg_enhance_ms']:.1f}ms avg "
+                f"(mode={nv_stats['mode']}, final profile={nv_stats['current_profile']})."
+            )
 
 
 def main():
+    default_model = os.path.join(project_root, "models", "yolov8n.pt")
+    if not os.path.exists(default_model):
+        default_model = "yolov8n.pt"
+
     parser = argparse.ArgumentParser(description="IBVAP Real YOLOv8 AI Pipeline")
     parser.add_argument("--camera",    default="BOP-07",                      help="Border Camera ID (e.g. BOP-07)")
-    parser.add_argument("--source",    default="E:/IBVAP/storage/videos/test_border.mp4", help="Path to MP4 or RTSP stream")
+    parser.add_argument("--source",    default="0",                           help="Path to MP4 or RTSP stream")
     parser.add_argument("--backend",   default="http://localhost:8000",         help="FastAPI Backend URL")
     parser.add_argument("--video-id",  default=None,                          help="Optional Video ID in DB")
     parser.add_argument("--conf",      type=float, default=0.40,             help="Detection confidence threshold (0.0 - 1.0)")
     parser.add_argument("--loiter",    type=float, default=15.0,             help="Loitering threshold in seconds")
-    parser.add_argument("--model",     default="E:/IBVAP/models/yolov8n.pt",  help="Path to YOLOv8n model weights")
+    parser.add_argument("--model",     default=default_model,                 help="Path to YOLOv8n model weights")
     parser.add_argument("--fps",       type=float, default=30.0,             help="Frame rate processing limit (0 for unlimited)")
     parser.add_argument("--loop",      action="store_true",                   help="Loop video continuously")
+    parser.add_argument("--night-vision", default=MODE_AUTO, choices=list(VALID_MODES),
+                        help="Low-light enhancement: AUTO (engage when dark), ALWAYS, or OFF")
     args = parser.parse_args()
 
     pipeline = IBVAPPipeline(
@@ -182,7 +221,8 @@ def main():
         loitering_threshold=args.loiter,
         model_path=args.model,
         throttle_fps=args.fps if args.fps > 0 else None,
-        loop_video=args.loop
+        loop_video=args.loop,
+        night_vision_mode=args.night_vision
     )
     pipeline.run()
 
