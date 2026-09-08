@@ -19,12 +19,36 @@ the correction.
 | `anpr_engine.py` CRNN | `text_recognition_CRNN_EN_2021sep.onnx` | `Conv_0`: `[N,1,32,100]` (1-channel) | `recognize_plate()` passes 3-channel BGR (`cv2.cvtColor(..., COLOR_GRAY2BGR)` on every one of its 4 passes) | **Yes, under OpenCV 5.0.0.93.** Fails under OpenCV 4.13.0 with `(-215) ngroups > 0 && inpCn % ngroups == 0`. | Isolated repro in both versions; see `ANPR_PHANTOM_TRACE.md`. Real forward pass returns a string; stored DB rows reconcile against `clean_and_validate_plate_text()` output (29/30 distinct values match exactly). |
 | `face_engine.py` YuNet | `face_detection_yunet_2023mar.onnx` | `FaceDetectorYN_create` input, dynamic `(w,h)` via `setInputSize` | `detect_primary_face()` calls `setInputSize((w,h))` then `detect(img_bgr)` with the actual crop dimensions | **Yes.** | Isolated forward pass on a synthetic 640x480 BGR frame: ran without exception, returned `faces=None` (expected — random noise contains no face). No exception, no silent swallow. |
 | `face_engine.py` SFace | `face_recognition_sface_2021dec.onnx` | `alignCrop` input: any BGR image + a 15-value `face_info` row (bbox + 5 landmarks + score); `feature` input: the aligned 112x112x3 crop | `extract_embedding()` calls `recognizer.alignCrop(img_bgr, face_info)` then `recognizer.feature(aligned_face)` | **Yes.** | Isolated forward pass with a synthetic `face_info` row: `alignCrop` → `(112,112,3)` uint8, `feature` → `(1,128)` float32, non-zero norm (5.222). Correct shape at every stage. |
-| `detector.py` YOLOv8n | `yolov8n.pt` | Ultralytics `YOLO.predict()`, internal preprocessing | `self.model.predict(frame, conf=self.conf_threshold, ...)` | **Not directly re-verified — `ultralytics` is not installed in either interpreter used in this audit.** Indirect evidence only. | `detections` table: 4,906 `VEHICLE` + 3,640 `PERSON` + 2 `ANIMAL` rows, confidence range 20.0–98.97 (mean 74.9), a continuous distribution — not the handful of fixed constants the broken ANPR scorer produces. Consistent with genuine model output, but not a substitute for a direct forward-pass check. |
+| `detector.py` YOLOv8n | `yolov8n.pt` | Ultralytics `YOLO.predict()`, internal preprocessing | `self.model.predict(frame, conf=self.conf_threshold, classes=ALL_SUPPORTED_CLASSES, verbose=False)` | **Yes — directly verified (Amendment 03 §D2), closing the gap left open at initial audit time.** | See update below. |
 
-**Follow-up needed, not performed here (out of scope for a report-only task):** install
-`ultralytics` in the reconstructed venv (Task 4 does this anyway) and run one real
-`YOLO.predict()` call to close this gap with direct evidence rather than distributional
-inference.
+### YOLOv8n forward-pass verification (Amendment 03 §D2 — closes the Task 2.6 gap)
+
+`ultralytics` (8.4.143) and `onnxruntime` (1.23.2) are now installed in the reconstructed
+Python 3.10.11 / OpenCV 5.0.0.93 venv (`IBVAP/venv`, built per Amendment 03 §D — see the
+environment note in `ANPR_BASELINE.md` for provenance). Ran the exact call shape
+`detector.py:120-124` uses, on a real frame pulled from
+`storage/videos/0729de5d-f707-45e3-a9f0-03cc68d95dc2_person-bicycle-car-detection.mp4`
+(not a synthetic array — a real frame exercises the real preprocessing path):
+
+```
+frame shape: (432, 768, 3)
+model.predict(source=frame, conf=0.40, classes=ALL_SUPPORTED_CLASSES, verbose=False)
+
+first call (cold, includes model init):  3440.8 ms
+steady-state (warmed up, CPU):              46.7 ms / frame
+
+detections on frame 30:  1 box  — class=person     conf=0.856  xyxy=[535.4, 285.3, 583.2, 389.5]
+detections on frame 199: 1 box  — class=car         conf=0.448  xyxy=(bbox recorded, real coords)
+```
+
+Real weights, real forward pass, plausible per-class confidences and pixel-space
+bounding boxes that move frame-to-frame with the video content — not a fixed heuristic
+constant, and not an exception silently swallowed into an empty list. **YOLOv8n is
+confirmed working correctly.** The distributional evidence from the DB in the original
+audit (4,906 `VEHICLE` / 3,640 `PERSON` / 2 `ANIMAL`, confidence range 20.0–98.97) is now
+corroborated by a direct, reproducible forward pass rather than resting on inference alone.
+
+No further follow-up needed for this component.
 
 ### Why YuNet/SFace did not fail like CRNN did
 
@@ -85,7 +109,7 @@ canned input.
 | Face detection | YuNet | dynamic | dynamic, matched | Yes, verified | **No** — out of scope, no defect found |
 | Face recognition | SFace | 112x112x3 aligned crop | matched via `alignCrop` | Yes, verified | **No** — out of scope, no defect found |
 | Face readiness flag | — | — | — | Construction-only (same pattern) | **No** — report to operator as separate finding, not fixed here per scope discipline |
-| Vehicle/person detection | YOLOv8n | Ultralytics-internal | Ultralytics-internal | **Not directly verified** (`ultralytics` not installed in either audit interpreter); indirect evidence (varied real-looking confidence distribution) is consistent with working | **No** — out of scope; recommend a direct forward-pass check once `ultralytics` is installed in Task 4's venv, since that installs it anyway |
+| Vehicle/person detection | YOLOv8n | Ultralytics-internal | Ultralytics-internal | **Yes — directly forward-tested (Amendment 03 §D2)**: real weights, real frame, 46.7ms/frame steady-state, plausible per-class confidences | **No** — out of scope; no defect found, gap closed |
 
 ### Items to report to the operator, not fixed here
 
@@ -94,10 +118,8 @@ canned input.
    identical to the one that hid the CRNN issue. Recommend a follow-up task, separate from
    this rebuild, to make readiness checks verify one real forward pass at load time across
    all three engines.
-2. **YOLOv8n has not been directly forward-tested in this audit** (missing dependency in
-   both interpreters used). Distributional evidence from the DB is reassuring but not
-   proof. Recommend closing this gap as soon as the Task 4 venv has `ultralytics` installed
-   — a two-line check, not a new task.
+2. ~~YOLOv8n forward-pass gap~~ — **closed.** Verified per Amendment 03 §D2 above: real
+   weights, real frame, working correctly. No action item remains.
 3. **`backend/database/init_db.py:47-48`'s bare `except Exception: pass`** swallows more
    than the "column already exists" case it's meant to. Low severity, unrelated to model
    inference, flagged for completeness since it matched the grep pattern.
