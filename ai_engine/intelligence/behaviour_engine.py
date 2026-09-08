@@ -29,7 +29,8 @@ class TrajectoryRecord:
         return len(self.positions) >= MIN_TRAJECTORY_FRAMES
 
     def current_velocity(self) -> float:
-        """Pixels/second over the last VELOCITY_WINDOW_FRAMES frames."""
+        """Normalized-coordinate units/second over the last VELOCITY_WINDOW_FRAMES frames.
+        Input coordinates are in [0, 100] percentage space."""
         if len(self.positions) < VELOCITY_WINDOW_FRAMES:
             return 0.0
         recent = list(self.positions)[-VELOCITY_WINDOW_FRAMES:]
@@ -39,7 +40,7 @@ class TrajectoryRecord:
         dt = times[-1] - times[0]
         if dt <= 0:
             return 0.0
-        return float(np.sqrt(dx**2 + dy**2) / dt)  # px/sec
+        return float(np.sqrt(dx**2 + dy**2) / dt)  # %/sec (normalized coords)
 
     def path_tortuosity(self) -> float:
         """
@@ -56,7 +57,11 @@ class TrajectoryRecord:
         )
         displacement = float(np.sqrt((pts[-1][0]-pts[0][0])**2 + (pts[-1][1]-pts[0][1])**2))
         if displacement < 1.0:
-            return 999.0  # Stationary or nearly stationary displacement
+            # Guard: only flag as high-tortuosity if total movement is substantial.
+            # Prevents bbox jitter on stationary targets from triggering CIRCLING.
+            if total_path < 3.0:
+                return 1.0   # Negligible movement — treat as straight line
+            return 999.0     # Stationary displacement but significant path = true circling
         return total_path / displacement
 
     def direction_changes(self) -> int:
@@ -92,8 +97,10 @@ class BehaviourLabel(str, Enum):
 
 
 # Empirically-tuned thresholds (adjust per deployment environment)
-VELOCITY_STATIONARY_THRESHOLD = 8.0     # px/sec
-VELOCITY_RUNNING_THRESHOLD    = 120.0   # px/sec
+# NOTE: Coordinates are normalised to [0, 100] percentage space.
+# A person walking across the full frame in ~5s ≈ 20 %/sec.
+VELOCITY_STATIONARY_THRESHOLD = 1.5     # %/sec — below this is stationary
+VELOCITY_RUNNING_THRESHOLD    = 25.0    # %/sec — above this is running/sprinting
 TORTUOSITY_CIRCLING_THRESHOLD = 2.5     # ratio
 DIRECTION_CHANGE_PACING_THRESHOLD = 4   # reversals in buffer window
 

@@ -8,10 +8,43 @@ and dispatches events to the FastAPI backend.
 import time
 import logging
 from typing import List, Dict, Optional, Tuple
+import cv2
+import uuid
+from pathlib import Path
 import requests
 from shapely.geometry import Point, Polygon
+
+SNAPSHOT_DIR = Path("storage/snapshots")
+SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+def save_annotated_snapshot(frame, bbox_dict, track_id, threat_level, reason) -> Optional[str]:
+    if frame is None:
+        return None
+    try:
+        annotated = frame.copy()
+        h_f, w_f = annotated.shape[:2]
+        x1 = int((bbox_dict.get("x", 0) / 100.0) * w_f)
+        y1 = int((bbox_dict.get("y", 0) / 100.0) * h_f)
+        w_b = int((bbox_dict.get("w", 0) / 100.0) * w_f)
+        h_b = int((bbox_dict.get("h", 0) / 100.0) * h_f)
+        x2, y2 = x1 + w_b, y1 + h_b
+        
+        color = (0, 0, 255) if threat_level == "CRITICAL" else (0, 140, 255)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+        cv2.putText(annotated, f"{threat_level} | ID:{track_id}", 
+                    (x1, max(0, y1-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        cv2.putText(annotated, reason[:60], 
+                    (10, annotated.shape[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                    
+        filename = f"{threat_level}_{track_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
+        path = SNAPSHOT_DIR / filename
+        cv2.imwrite(str(path), annotated)
+        return f"storage/snapshots/{filename}"
+    except Exception as e:
+        logger.error(f"[ThreatEngine] Error saving snapshot: {e}")
+        return None
 from ai_engine.tracking.tracker import TrackedObject
-from ai_engine.intelligence.behaviour_engine import BehaviourEngine, BehaviourLabel, get_behaviour_engine
+from ai_engine.intelligence.behaviour_engine import BehaviourEngine, BehaviourLabel
 
 logger = logging.getLogger("threat_engine")
 
@@ -48,7 +81,10 @@ class ThreatEngine:
         self.alert_cooldown_seconds = alert_cooldown_seconds
         self.min_confidence = min_confidence
         self.alert_callback = alert_callback
-        self.behaviour_engine = get_behaviour_engine()
+        # Per-camera instance to prevent cross-camera track ID collision
+        self.behaviour_engine = BehaviourEngine()
+        # Grace period: track IDs missing for fewer frames than this are kept
+        self._trajectory_miss_counts: Dict[int, int] = {}
 
         # Configure Source-Specific Restricted Zone Polygon
         self.set_zone(restricted_zone_polygon, zone_name)
@@ -190,11 +226,18 @@ class ThreatEngine:
         current_time = time.time()
         processed_detections = []
 
-        # Clean up stale/lost tracks in trajectory store
+        # Clean up stale/lost tracks in trajectory store (with grace period)
+        # Allow up to 5 missed frames before purging, matching Tracker's occlusion tolerance
+        TRAJECTORY_MISS_GRACE = 5
         active_ids = {t.track_id for t in tracks}
         for stored_id in list(self.behaviour_engine._trajectories.keys()):
             if stored_id not in active_ids:
-                self.behaviour_engine.remove(stored_id)
+                self._trajectory_miss_counts[stored_id] = self._trajectory_miss_counts.get(stored_id, 0) + 1
+                if self._trajectory_miss_counts[stored_id] >= TRAJECTORY_MISS_GRACE:
+                    self.behaviour_engine.remove(stored_id)
+                    self._trajectory_miss_counts.pop(stored_id, None)
+            else:
+                self._trajectory_miss_counts.pop(stored_id, None)
 
         for track in tracks:
             bx, by = track.bottom_center
@@ -216,7 +259,7 @@ class ThreatEngine:
                     logger.error(f"[ThreatEngine] Zone check error: {e}")
 
             # 2. Update Spatial State on Track Object
-            track.update_zone_status(is_in_zone)
+            track.update_zone_status(is_in_zone, self.zone_name)
             zone_dwell = track.zone_dwell_time
             is_loitering = (zone_dwell >= self.loitering_threshold)
 
@@ -285,6 +328,10 @@ class ThreatEngine:
 
 
                 if should_alert:
+                    snapshot_path = None
+                    if frame_bgr is not None:
+                        snapshot_path = save_annotated_snapshot(frame_bgr, track.bbox, track.track_id, threat_level, reason)
+
                     alert_payload = {
                         "camera_id": self.camera_id,
                         "video_id": video_id,
@@ -295,6 +342,8 @@ class ThreatEngine:
                         "reason": reason,
                         "confidence": round(track.confidence, 1),
                         "bbox": track.bbox,
+                        "behaviour_label": b_label_str,
+                        "snapshot_path": snapshot_path,
                     }
                     if self.alert_callback:
                         try:
@@ -349,7 +398,8 @@ class ThreatEngine:
         track_id: Optional[int],
         bbox: dict,
         is_in_zone: bool = False,
-        video_id: Optional[str] = None
+        video_id: Optional[str] = None,
+        frame_bgr: Optional[object] = None
     ) -> bool:
         """
         Processes a confirmed real Watchlist Match from the FaceEngine.
@@ -402,6 +452,10 @@ class ThreatEngine:
                 f"with {similarity:.1f}% face match confidence."
             )
 
+        snapshot_path = None
+        if frame_bgr is not None:
+            snapshot_path = save_annotated_snapshot(frame_bgr, bbox, track_id, threat_level, reason)
+
         alert_payload = {
             "camera_id": self.camera_id,
             "video_id": video_id,
@@ -412,6 +466,7 @@ class ThreatEngine:
             "reason": reason,
             "confidence": similarity,
             "bbox": bbox,
+            "snapshot_path": snapshot_path,
         }
 
         if self.alert_callback:

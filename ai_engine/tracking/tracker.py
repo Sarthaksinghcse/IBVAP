@@ -69,6 +69,15 @@ class TrackedObject:
         cy = self.bbox["y"] + (self.bbox["h"] / 2.0)
         return (cx, cy)
 
+    def update_zone_status(self, is_in_zone: bool, zone_name: str = None):
+        if is_in_zone and not self.in_zone:
+            self.zone_entry_time = time.time()
+            self.zone_name = zone_name
+        elif not is_in_zone and self.in_zone:
+            self.zone_entry_time = None
+            self.zone_name = None
+        self.in_zone = is_in_zone
+
 
 def _compute_iou(boxA: dict, boxB: dict) -> float:
     """Compute Intersection over Union between two bounding boxes in % coordinates."""
@@ -93,17 +102,28 @@ def _compute_iou(boxA: dict, boxB: dict) -> float:
 class Tracker:
     """
     Robust Multi-Object Tracker and State Manager.
+    Integrates with ByteTrack.
     Uses IoU overlap, centroid proximity, and ID remapping to maintain stable track IDs
     across pose changes, movements, head turns, and brief occlusions.
     """
 
-    def __init__(self, max_missed_seconds: float = 4.5, match_distance_threshold: float = 32.0):
+    def __init__(self, max_missed_seconds: float = 3.0, match_distance_threshold: float = 32.0):
         self.tracks: Dict[int, TrackedObject] = {}
         self.yolo_to_stable_id: Dict[int, int] = {}
         self.max_missed_seconds = max_missed_seconds
         self.match_distance_threshold = match_distance_threshold
         self.next_fallback_id = 1
+        self._last_lost_ids: List[int] = []
         logger.info("[Tracker] Object Tracker initialized.")
+
+    @property
+    def all_tracks(self) -> List[TrackedObject]:
+        """Return all active tracks in the system."""
+        return list(self.tracks.values())
+
+    def get_lost_ids(self) -> List[int]:
+        """Return track IDs that were removed in the last update cycle."""
+        return self._last_lost_ids
 
     def _find_best_matching_track(self, det: Detection, active_ids: set) -> Optional[int]:
         """Find the best existing unassigned track of the same type via IoU and distance."""
@@ -209,6 +229,7 @@ class Tracker:
         # Remove stale tracks past timeout
         stale_threshold = current_time - self.max_missed_seconds
         stale_ids = [tid for tid, trk in self.tracks.items() if trk.last_seen < stale_threshold]
+        self._last_lost_ids = stale_ids  # Store for behaviour engine cleanup
         for tid in stale_ids:
             del self.tracks[tid]
             # Clean reverse mapping
