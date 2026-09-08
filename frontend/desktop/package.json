@@ -1,0 +1,78 @@
+{
+  "name": "ibvap-desktop",
+  "version": "1.0.0",
+  "description": "IBVAP — Intelligent Border Video Analytics Platform (Desktop)",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "package": "electron-builder --win --dir"
+  },
+  "author": "IBVAP Team",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "electron-is-dev": "^2.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.ibvap.desktop",
+    "productName": "IBVAP",
+    "copyright": "Copyright © 2025 IBVAP Team",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash.html",
+      "icon.ico",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../web_portal/dist",
+        "to": "app",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../../backend",
+        "to": "backend",
+        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+      },
+      {
+        "from": "../../ai_engine",
+        "to": "ai_engine",
+        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+      },
+      {
+        "from": "../../storage",
+        "to": "storage",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "IBVAP"
+    }
+  }
+}

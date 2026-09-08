@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './store/useStore';
@@ -14,12 +14,33 @@ import Analytics     from './pages/Analytics';
 import SystemStatus  from './pages/SystemStatus';
 import Settings      from './pages/Settings';
 
-// ─── Inner App (needs to be inside BrowserRouter for hooks) ──────────────────
+// ─── Detect Electron ─────────────────────────────────────────────────────────
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      isDesktop: boolean;
+      showNotification: (title: string, body: string, urgency?: string) => void;
+      minimizeToTray: () => void;
+      getAppVersion: () => Promise<string>;
+      onNavigate: (callback: (route: string) => void) => void;
+    };
+  }
+}
+
+const isElectron = !!(window as any).electronAPI?.isDesktop;
+
+// Choose router based on environment
+// Electron uses file:// protocol which doesn't support browser history routing
+const Router = isElectron ? HashRouter : BrowserRouter;
+
+// ─── Inner App (needs to be inside Router for hooks) ─────────────────────────
 
 function AppRoutes() {
   // Start WebSocket (or mock engine) — called once at root level
   useWebSocket();
   const theme = useStore((s) => s.theme);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (theme === 'light') {
@@ -32,6 +53,15 @@ function AppRoutes() {
       document.documentElement.setAttribute('data-theme', 'dark');
     }
   }, [theme]);
+
+  // Listen for navigation commands from Electron tray menu
+  useEffect(() => {
+    if (window.electronAPI?.onNavigate) {
+      window.electronAPI.onNavigate((route: string) => {
+        navigate(route);
+      });
+    }
+  }, [navigate]);
 
   return (
 
@@ -62,8 +92,8 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <Router>
       <AppRoutes />
-    </BrowserRouter>
+    </Router>
   );
 }
