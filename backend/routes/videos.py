@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, B
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from database.database import get_db, SessionLocal
-from models.models import Video, Detection, Alert, Zone
+from models.models import Video, Detection, Alert, Zone, ANPREvent
 from schemas.schemas import VideoResponse
 from websocket.manager import manager
 from datetime import datetime, timedelta
@@ -118,6 +118,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
 
         face_engine = get_face_engine()
         anpr_engine = get_anpr_engine()
+        anpr_engine.clear_cache()
         watchlist_records = _load_active_watchlist_records(db)
 
         # Load active vehicle plate watchlist records
@@ -252,7 +253,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                 if is_in_zone and threat_engine.zone_name:
                     event_type = "ZONE_INTRUSION"
                 plate_info = None
-                if track.object_type == "VEHICLE":
+                if track.object_type in ["VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE"]:
                     plate_eval = anpr_engine.evaluate_vehicle_plate(
                         frame_bgr=frame,
                         vehicle_bbox=track.bbox,
@@ -334,7 +335,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             })
 
                     # Handle UNREADABLE Plate candidate (honestly logged, zero hallucination)
-                    elif p_status == "UNREADABLE":
+                    elif p_status in ["UNREADABLE", "UNCERTAIN"]:
                         anpr_unreadable_key = f"anpr_unreadable_{camera_id}_{track.track_id}"
                         if anpr_unreadable_key not in alerted_tracks:
                             alerted_tracks.add(anpr_unreadable_key)
@@ -379,8 +380,8 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                     event_type = "PLATE_DETECTED"
                 elif plate_info and plate_info.get("plate_status") == "UNREADABLE":
                     event_type = "UNREADABLE_PLATE"
-                elif track.object_type == "VEHICLE":
-                    event_type = "VEHICLE_DETECTED"
+                elif track.object_type in ["VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE"]:
+                    event_type = f"{track.object_type}_DETECTED"
 
                 det_label = track.object_label
                 if face_match_data:
@@ -418,7 +419,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
 
 
                 # Real Alert Generation upon Zone Intrusion
-                if is_in_zone and threat_engine.zone_name and track.object_type in ["PERSON", "VEHICLE"]:
+                if is_in_zone and threat_engine.zone_name and track.object_type in ["PERSON", "VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE"]:
                     if track.track_id not in alerted_tracks:
                         alerted_tracks.add(track.track_id)
                         events_count += 1
@@ -609,6 +610,53 @@ def cancel_video_analysis(video_id: str, db: Session = Depends(get_db)):
         db.commit()
 
     return {"status": "ok", "video_id": video_id, "message": "Analysis cancelled"}
+
+
+@router.post("/{video_id}/analyze")
+def trigger_video_analysis(video_id: str, db: Session = Depends(get_db)):
+    """Trigger real AI & ANPR analysis on an existing uploaded video."""
+    v = db.query(Video).filter(Video.id == video_id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if not os.path.exists(v.file_path):
+        raise HTTPException(status_code=400, detail="Video file not found on disk")
+
+    # Clear old detections & ANPR events for clean re-analysis
+    db.query(Detection).filter(Detection.video_id == video_id).delete()
+    db.query(ANPREvent).filter(ANPREvent.video_id == video_id).delete()
+    db.query(Alert).filter(Alert.video_id == video_id).delete()
+    v.status = "PROCESSING"
+    db.commit()
+
+    cap = cv2.VideoCapture(v.file_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+
+    with _jobs_lock:
+        _video_jobs[video_id] = {
+            "video_id": video_id,
+            "status": "PROCESSING",
+            "progress": 0,
+            "current_frame": 0,
+            "total_frames": total_frames,
+            "fps": round(fps, 1),
+            "analysis_fps": 5.0,
+            "duration": v.duration or 0.0,
+            "detections": 0,
+            "tracks": 0,
+            "events": 0,
+            "error": None,
+            "cancel_requested": False
+        }
+
+    t = threading.Thread(
+        target=run_video_inference_worker,
+        args=(video_id, v.file_path, v.camera_id or "BOP-07"),
+        daemon=True
+    )
+    t.start()
+    return {"status": "started", "video_id": video_id}
 
 
 @router.post("/upload", response_model=VideoResponse)

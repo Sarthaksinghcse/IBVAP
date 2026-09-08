@@ -7,27 +7,34 @@ import { formatEventTime } from '../../utils/time';
 
 
 const EVENT_SHORT: Record<string, { label: string; color: string }> = {
-  WATCHLIST_MATCH:     { label: 'Watchlist Match',     color: 'text-red-500 font-bold' },
-  UNKNOWN_FACE:        { label: 'Unknown Face',        color: 'text-slate-400' },
-  FACE_DETECTED:       { label: 'Face Detected',       color: 'text-cyan-400' },
-  PLATE_DETECTED:      { label: 'Plate Identified',    color: 'text-indigo-400 font-bold' },
-  UNREADABLE_PLATE:    { label: 'Plate Unreadable',    color: 'text-slate-400' },
-  ZONE_INTRUSION:      { label: 'Zone Intrusion',      color: 'text-red-400' },
-  LOITERING:           { label: 'Loitering',            color: 'text-orange-400' },
+  WATCHLIST_MATCH:     { label: 'WATCHLIST MATCH',     color: 'text-red-500 font-bold' },
+  UNKNOWN_FACE:        { label: 'UNKNOWN FACE',        color: 'text-slate-400' },
+  FACE_DETECTED:       { label: 'FACE DETECTED',       color: 'text-cyan-400' },
+  PLATE_DETECTED:      { label: 'PLATE IDENTIFIED',    color: 'text-indigo-400 font-bold' },
+  UNREADABLE_PLATE:    { label: 'PLATE UNREADABLE',    color: 'text-slate-400' },
+  ZONE_INTRUSION:      { label: 'ZONE INTRUSION',      color: 'text-red-400 font-bold' },
+  LOITERING:           { label: 'LOITERING',           color: 'text-orange-400 font-bold' },
 
-  PERSON_DETECTED:     { label: 'Person Detected',      color: 'text-green-400' },
-  CAR_DETECTED:        { label: 'Car Detected',         color: 'text-blue-400' },
-  BICYCLE_DETECTED:    { label: 'Bicycle Detected',     color: 'text-cyan-400' },
-  MOTORCYCLE_DETECTED: { label: 'Motorcycle Detected',  color: 'text-blue-400' },
-  BUS_DETECTED:        { label: 'Bus Detected',         color: 'text-indigo-400' },
-  TRUCK_DETECTED:      { label: 'Truck Detected',       color: 'text-indigo-400' },
-  VEHICLE_DETECTED:    { label: 'Vehicle Detected',     color: 'text-blue-400' },
-  SUSPICIOUS_ACTIVITY: { label: 'Suspicious',           color: 'text-orange-400' },
-  PERSON_TRACKED:      { label: 'Person Tracked',       color: 'text-teal-400' },
-  VEHICLE_TRACKED:     { label: 'Vehicle Tracked',      color: 'text-teal-400' },
-  OBJECT_TRACKED:      { label: 'Object Tracked',       color: 'text-teal-400' },
-  THREAT_CORRELATION:  { label: 'Threat Correlated',    color: 'text-red-400' },
-  THREAT_ESCALATION:   { label: 'Threat Escalation',    color: 'text-red-400' },
+  PERSON_DETECTED:     { label: 'PERSON DETECTED',     color: 'text-green-400 font-semibold' },
+  CAR_DETECTED:        { label: 'CAR DETECTED',        color: 'text-blue-400 font-semibold' },
+  BICYCLE_DETECTED:    { label: 'BICYCLE DETECTED',    color: 'text-cyan-400 font-semibold' },
+  MOTORCYCLE_DETECTED: { label: 'MOTORCYCLE DETECTED', color: 'text-blue-400 font-semibold' },
+  BUS_DETECTED:        { label: 'BUS DETECTED',        color: 'text-indigo-400 font-semibold' },
+  TRUCK_DETECTED:      { label: 'TRUCK DETECTED',      color: 'text-indigo-400 font-semibold' },
+  VEHICLE_DETECTED:    { label: 'VEHICLE DETECTED',    color: 'text-blue-400 font-semibold' },
+  DOG_DETECTED:        { label: 'DOG DETECTED',        color: 'text-amber-400 font-semibold' },
+  CAT_DETECTED:        { label: 'CAT DETECTED',        color: 'text-amber-400 font-semibold' },
+  BIRD_DETECTED:       { label: 'BIRD DETECTED',       color: 'text-cyan-400 font-semibold' },
+  HORSE_DETECTED:      { label: 'HORSE DETECTED',      color: 'text-amber-400 font-semibold' },
+  COW_DETECTED:        { label: 'COW DETECTED',        color: 'text-amber-400 font-semibold' },
+  SHEEP_DETECTED:      { label: 'SHEEP DETECTED',      color: 'text-amber-400 font-semibold' },
+  ANIMAL_DETECTED:     { label: 'ANIMAL DETECTED',     color: 'text-amber-400 font-semibold' },
+  SUSPICIOUS_ACTIVITY: { label: 'SUSPICIOUS',          color: 'text-orange-400' },
+  PERSON_TRACKED:      { label: 'PERSON TRACKED',      color: 'text-teal-400' },
+  VEHICLE_TRACKED:     { label: 'VEHICLE TRACKED',     color: 'text-teal-400' },
+  OBJECT_TRACKED:      { label: 'OBJECT TRACKED',      color: 'text-teal-400' },
+  THREAT_CORRELATION:  { label: 'THREAT CORRELATED',   color: 'text-red-400' },
+  THREAT_ESCALATION:   { label: 'THREAT ESCALATION',   color: 'text-red-400' },
 };
 
 
@@ -81,7 +88,21 @@ function aggregateDetections(
     const prevTime = lastLoggedTime.get(key);
     const prevState = lastLoggedState.get(key);
 
-    let eventType = det.event_type || 'PERSON_DETECTED';
+    // Derive or preserve exact event type from runtime inference
+    let eventType = det.event_type;
+    if (!eventType) {
+      if (det.object_type === 'PERSON') eventType = 'PERSON_DETECTED';
+      else if (det.object_id && det.object_id.startsWith('Car')) eventType = 'CAR_DETECTED';
+      else if (det.object_id && det.object_id.startsWith('Dog')) eventType = 'DOG_DETECTED';
+      else if (det.object_id && det.object_id.startsWith('Cat')) eventType = 'CAT_DETECTED';
+      else if (det.object_id && det.object_id.startsWith('Truck')) eventType = 'TRUCK_DETECTED';
+      else if (det.object_id && det.object_id.startsWith('Bus')) eventType = 'BUS_DETECTED';
+      else if (det.object_id && det.object_id.startsWith('Motorcycle')) eventType = 'MOTORCYCLE_DETECTED';
+      else if (det.object_id && det.object_id.startsWith('Bicycle')) eventType = 'BICYCLE_DETECTED';
+      else if (det.object_type) eventType = `${det.object_type}_DETECTED`;
+      else eventType = 'OBJECT_DETECTED';
+    }
+
     let shouldLog = false;
 
     // Check if detection contains an active ANPR event
@@ -93,19 +114,10 @@ function aggregateDetections(
     const isReadablePlate = hasPlate && det.plate_info?.plate_status === 'READABLE' && Boolean(det.plate_info?.plate_text);
 
     if (prevTime == null) {
-      // First time object is observed — preserve ANPR event if present
-      if (!hasPlate) {
-        if (det.object_id && det.object_id.startsWith('Car')) eventType = 'CAR_DETECTED';
-        else if (det.object_id && det.object_id.startsWith('Bicycle')) eventType = 'BICYCLE_DETECTED';
-        else if (det.object_id && det.object_id.startsWith('Motorcycle')) eventType = 'MOTORCYCLE_DETECTED';
-        else if (det.object_id && det.object_id.startsWith('Bus')) eventType = 'BUS_DETECTED';
-        else if (det.object_id && det.object_id.startsWith('Truck')) eventType = 'TRUCK_DETECTED';
-        else if (det.object_type === 'VEHICLE') eventType = 'VEHICLE_DETECTED';
-        else eventType = 'PERSON_DETECTED';
-      }
+      // First time object is observed
       shouldLog = true;
     } else if (isReadablePlate && prevState !== 'PLATE_DETECTED') {
-      // Transition from unreadable/tracked to successfully identified plate!
+      // Transition to successfully identified plate
       eventType = 'PLATE_DETECTED';
       shouldLog = true;
     } else if (hasPlate && prevState !== 'PLATE_DETECTED' && prevState !== 'UNREADABLE_PLATE') {
@@ -119,9 +131,8 @@ function aggregateDetections(
       // Significant event transition to loitering
       eventType = 'LOITERING';
       shouldLog = true;
-    } else if (currentTime - prevTime >= 3.0) {
-      // Periodic update every 3 seconds for continuous tracking
-      eventType = det.object_type === 'VEHICLE' ? 'VEHICLE_TRACKED' : 'PERSON_TRACKED';
+    } else if (currentTime - prevTime >= 6.0) {
+      // Periodic heartbeat update
       shouldLog = true;
     }
 
@@ -175,6 +186,7 @@ function DetectionRow({
   const isAnprEvent = det.event_type === 'PLATE_DETECTED' || det.event_type === 'UNREADABLE_PLATE' || Boolean(det.plate_info?.plate_detected);
   if (isAnprEvent) {
     const isReadable = det.plate_info?.plate_status === 'READABLE' && Boolean(det.plate_info?.plate_text);
+    const isReading = det.plate_info?.plate_status === 'READING';
     const plateText = det.plate_info?.plate_text;
     const plateConf = det.plate_info?.plate_confidence;
 
@@ -195,6 +207,11 @@ function DetectionRow({
               <span className="inline-flex items-center gap-1 bg-white text-slate-900 font-mono font-black text-xs px-2 py-0.5 rounded border border-slate-300 shadow-sm tracking-widest">
                 <span className="bg-blue-700 text-white text-[8px] font-bold px-1 rounded-xs">IND</span>
                 {plateText}
+              </span>
+            ) : isReading ? (
+              <span className="text-[11px] font-mono font-medium text-sky-300 bg-sky-500/15 border border-sky-500/40 px-2 py-0.5 rounded flex items-center gap-1 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
+                Reading...
               </span>
             ) : (
               <span className="text-[11px] font-mono font-medium text-amber-300 bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 rounded">
@@ -258,24 +275,29 @@ export function DetectionLog({ cameraId }: DetectionLogProps) {
   const selectedCameraId  = useStore((s) => s.selectedCameraId);
   const settings          = useStore((s) => s.settings);
 
-  // Source modes
   const isAnalyzing = !cameraMode && !!activeVideoId && !!uploadStatus && uploadStatus !== 'COMPLETED' && uploadStatus !== 'ERROR';
   const isVideoMode = !cameraMode && !!activeVideoId && uploadStatus === 'COMPLETED';
+
+  const liveSourceId = cameraMode ? (cameraId || 'WEBCAM-01') : (cameraId || selectedCameraId);
 
   // 1. Isolate active source detections (no cross-source leaking)
   const sourceDetections = isVideoMode
     ? detections.filter((d) => d.video_id === activeVideoId)
     : cameraMode
-    ? detections.filter((d) => d.camera_id === 'WEBCAM-01' || d.camera_id === 'webcam')
+    ? detections.filter((d) => d.camera_id === liveSourceId || d.camera_id === 'WEBCAM-01' || d.camera_id === 'webcam')
     : isAnalyzing
     ? [] // Empty during video analysis
-    : detections.filter((d) => d.camera_id === (cameraId || selectedCameraId) && !d.video_id);
+    : detections.filter((d) => d.camera_id === liveSourceId && !d.video_id);
+
+  const cameras           = useStore((s) => s.cameras);
+  const activeCam         = cameras.find((c) => c.id === liveSourceId);
+  const isLiveStreamActive = cameraMode || Boolean(activeCam && activeCam.status === 'ONLINE');
 
   // 2. Aggregate frame observations into operator activity events
   const aggregated = aggregateDetections(
     sourceDetections,
     isVideoMode,
-    settings.aiThreshold || 50
+    settings.aiThreshold ?? 30
   );
 
   return (
@@ -299,6 +321,12 @@ export function DetectionLog({ cameraId }: DetectionLogProps) {
               WEBCAM
             </span>
           )}
+          {!isAnalyzing && !isVideoMode && isLiveStreamActive && (
+            <span className="text-[9px] font-mono font-bold text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              YOLOv8 LIVE
+            </span>
+          )}
         </div>
         <span className="text-[10px] font-mono text-[#9aa2b5] light:text-slate-500">
           {isAnalyzing ? 'Processing...' : `${aggregated.length} event${aggregated.length !== 1 ? 's' : ''} logged`}
@@ -316,11 +344,15 @@ export function DetectionLog({ cameraId }: DetectionLogProps) {
           </div>
         ) : aggregated.length === 0 ? (
           <div className="py-12 text-center">
-            <div className="w-8 h-8 rounded-full bg-[#191c24] light:bg-slate-100 border border-[#272b37] light:border-slate-300 flex items-center justify-center mx-auto mb-2 text-[#62697b] light:text-slate-400">
-              <Activity size={16} />
+            <div className={`w-8 h-8 rounded-full ${isLiveStreamActive ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400' : 'bg-[#191c24] light:bg-slate-100 border-[#272b37] light:border-slate-300 text-[#62697b] light:text-slate-400'} border flex items-center justify-center mx-auto mb-2`}>
+              <Activity size={16} className={isLiveStreamActive ? 'animate-pulse' : ''} />
             </div>
-            <p className="text-xs font-medium text-white light:text-slate-800">No detections</p>
-            <p className="text-[10px] text-[#9aa2b5] light:text-slate-500 mt-1">No activity logged for active source</p>
+            <p className="text-xs font-medium text-white light:text-slate-800">
+              {isLiveStreamActive ? 'Live AI Surveillance Active' : 'Waiting for AI detection...'}
+            </p>
+            <p className="text-[10px] text-[#9aa2b5] light:text-slate-500 mt-1">
+              {isLiveStreamActive ? 'Continuous inference running — no targets currently in view' : 'No objects currently visible in camera feed'}
+            </p>
           </div>
         ) : (
           aggregated.map((det) => (
@@ -328,7 +360,7 @@ export function DetectionLog({ cameraId }: DetectionLogProps) {
               key={det.id}
               det={det}
               isVideoMode={isVideoMode}
-              showConfidence={settings.showConfidence}
+              showConfidence={settings.showConfidence ?? true}
             />
           ))
         )}

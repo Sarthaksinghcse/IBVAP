@@ -68,6 +68,11 @@ def create_or_upsert_zone(data: ZoneCreate, db: Session = Depends(get_db)):
         existing.updated_at = now
         db.commit()
         db.refresh(existing)
+        try:
+            from services.camera_stream_worker import camera_stream_manager
+            camera_stream_manager.refresh_worker_zone(data.source_id)
+        except Exception as se:
+            logger.debug(f"[Zones] Stream manager sync: {se}")
         logger.info(f"[Zones] Updated zone for source '{data.source_id}' with {len(data.coordinates)} points")
         return _zone_to_response(existing)
     else:
@@ -85,6 +90,11 @@ def create_or_upsert_zone(data: ZoneCreate, db: Session = Depends(get_db)):
         db.add(new_zone)
         db.commit()
         db.refresh(new_zone)
+        try:
+            from services.camera_stream_worker import camera_stream_manager
+            camera_stream_manager.refresh_worker_zone(data.source_id)
+        except Exception as se:
+            logger.debug(f"[Zones] Stream manager sync: {se}")
         logger.info(f"[Zones] Created new zone for source '{data.source_id}' with {len(data.coordinates)} points")
         return _zone_to_response(new_zone)
 
@@ -108,6 +118,11 @@ def update_zone(source_id: str, data: ZoneUpdate, db: Session = Depends(get_db))
     zone.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(zone)
+    try:
+        from services.camera_stream_worker import camera_stream_manager
+        camera_stream_manager.refresh_worker_zone(source_id)
+    except Exception as se:
+        logger.debug(f"[Zones] Stream manager sync: {se}")
     logger.info(f"[Zones] Updated zone for source '{source_id}'")
     return _zone_to_response(zone)
 
@@ -121,5 +136,10 @@ def delete_zone(source_id: str, db: Session = Depends(get_db)):
 
     db.delete(zone)
     db.commit()
+    try:
+        from services.camera_stream_worker import camera_stream_manager
+        camera_stream_manager.refresh_worker_zone(source_id)
+    except Exception as se:
+        logger.debug(f"[Zones] Stream manager sync: {se}")
     logger.info(f"[Zones] Deleted zone for source '{source_id}'")
     return {"status": "ok", "message": f"Zone for source '{source_id}' removed"}

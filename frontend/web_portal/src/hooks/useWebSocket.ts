@@ -55,8 +55,8 @@ export function useWebSocket() {
 
           const currentSettings = useStore.getState().settings;
 
-          // Multi-Modal Alerting (SIH Differentiator 3)
-          if (alertData.threat_level === 'CRITICAL') {
+          // Multi-Modal Alerting (SIH Differentiator 3) - Trigger on both CRITICAL and HIGH alerts
+          if (alertData.threat_level === 'CRITICAL' || alertData.threat_level === 'HIGH') {
             if (currentSettings.alertSound) {
               playAlertChime();
             }
@@ -81,9 +81,12 @@ export function useWebSocket() {
             updateAlertStatus(msg.data.id, msg.data.status);
           }
           break;
-        case 'DETECTION':
-          addDetection(msg.data as Parameters<typeof addDetection>[0]);
+        case 'DETECTION': {
+          const det = msg.data as Parameters<typeof addDetection>[0];
+          console.log('[UI] detection received:', det.object_id, `${det.confidence}%`, det.event_type);
+          addDetection(det);
           break;
+        }
         case 'SYSTEM':
           setSystemStatus(msg.data as Parameters<typeof setSystemStatus>[0]);
           break;

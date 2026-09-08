@@ -25,6 +25,9 @@ class TrackedObject:
         self.last_seen     = time.time()
         self.frame_count   = 1
         self.in_zone       = False
+        self.was_in_zone   = False
+        self.just_entered_zone = False
+        self.just_exited_zone  = False
         self.zone_name     = None
         self.zone_entry_time: Optional[float] = None
         self.trajectory    = []                # List of (center_x, center_y) points
@@ -55,6 +58,24 @@ class TrackedObject:
         cy = self.bbox["y"] + (self.bbox["h"] / 2.0)
         return (cx, cy)
 
+    def update_zone_status(self, in_zone: bool, zone_name: Optional[str] = None):
+        """Update spatial zone status, detect transitions, and manage zone dwell timers."""
+        now = time.time()
+        self.was_in_zone = self.in_zone
+        self.just_entered_zone = (in_zone and not self.was_in_zone)
+        self.just_exited_zone = (not in_zone and self.was_in_zone)
+
+        if in_zone:
+            if not self.in_zone:
+                self.in_zone = True
+                self.zone_entry_time = now
+            if zone_name:
+                self.zone_name = zone_name
+        else:
+            self.in_zone = False
+            self.zone_name = None
+            self.zone_entry_time = None
+
 
 def _compute_iou(boxA: dict, boxB: dict) -> float:
     """Compute Intersection over Union between two bounding boxes in % coordinates."""
@@ -83,7 +104,7 @@ class Tracker:
     across pose changes, movements, head turns, and brief occlusions.
     """
 
-    def __init__(self, max_missed_seconds: float = 4.5, match_distance_threshold: float = 32.0):
+    def __init__(self, max_missed_seconds: float = 6.0, match_distance_threshold: float = 35.0):
         self.tracks: Dict[int, TrackedObject] = {}
         self.yolo_to_stable_id: Dict[int, int] = {}
         self.max_missed_seconds = max_missed_seconds
@@ -92,7 +113,7 @@ class Tracker:
         logger.info("[Tracker] Object Tracker initialized.")
 
     def _find_best_matching_track(self, det: Detection, active_ids: set) -> Optional[int]:
-        """Find the best existing unassigned track of the same type via IoU and distance."""
+        """Find the best existing unassigned track of the same type via unified IoU and distance scoring."""
         dx = det.bbox["x"] + det.bbox["w"] / 2.0
         dy = det.bbox["y"] + det.bbox["h"] / 2.0
         best_id = None
@@ -106,16 +127,18 @@ class Tracker:
             tcx, tcy = trk.center
             dist = math.hypot(dx - tcx, dy - tcy)
 
-            # High IoU is an immediate strong match
-            if iou >= 0.20 and iou > best_score:
-                best_score = iou
+            # Combined score: IoU overlap takes priority [1.15, 2.0], proximity [0.0, 1.0)
+            prox_score = max(0.0, 1.0 - (dist / self.match_distance_threshold))
+            if iou >= 0.15:
+                score = 1.0 + iou
+            elif dist < self.match_distance_threshold:
+                score = prox_score
+            else:
+                score = -1.0
+
+            if score > best_score and score > 0.15:
+                best_score = score
                 best_id = tid
-            elif iou < 0.20 and dist < self.match_distance_threshold:
-                # Proximity score (closer is better)
-                prox_score = 1.0 - (dist / self.match_distance_threshold)
-                if prox_score > best_score:
-                    best_score = prox_score
-                    best_id = tid
 
         return best_id
 
@@ -200,5 +223,7 @@ class Tracker:
             for k in keys_to_del:
                 del self.yolo_to_stable_id[k]
 
-        return [self.tracks[tid] for tid in active_ids if tid in self.tracks]
+        active_objects = [self.tracks[tid] for tid in active_ids if tid in self.tracks]
+        logger.info(f"[TRACKER] {len(active_objects)} active tracks")
+        return active_objects
 

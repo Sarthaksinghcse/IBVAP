@@ -56,21 +56,26 @@ export default function Dashboard() {
     ? true
     : (cameras.find((c) => c.id === selectedCameraId)?.status === 'ONLINE');
 
-  // UNIQUE ACTIVE PERSON & VEHICLE TRACKS
+  // UNIQUE ACTIVE PERSON, VEHICLE & ANIMAL TRACKS
   const currentActivePeople = isSourceStreaming
     ? new Set(currentActiveTracks.filter((d) => d.object_type === 'PERSON').map((d) => d.object_id)).size
     : 0;
 
   const currentActiveVehicles = isSourceStreaming
-    ? new Set(currentActiveTracks.filter((d) => d.object_type === 'VEHICLE').map((d) => d.object_id)).size
+    ? new Set(currentActiveTracks.filter((d) => ['VEHICLE', 'CAR', 'TRUCK', 'BUS', 'MOTORCYCLE', 'BICYCLE'].includes(d.object_type)).map((d) => d.object_id)).size
+    : 0;
+
+  const currentActiveAnimals = isSourceStreaming
+    ? new Set(currentActiveTracks.filter((d) => ['ANIMAL', 'DOG', 'CAT', 'BIRD', 'HORSE', 'COW', 'SHEEP'].includes(d.object_type)).map((d) => d.object_id)).size
     : 0;
 
   const activeCams    = getActiveCamerasCount(cameras, isWebcamActive, activeCameraStream);
   const totalCams     = getTotalCamerasCount(cameras, isWebcamActive, activeCameraStream);
 
-  // If 0 cameras connected, metrics reflect zero active streams
+  // If 0 cameras connected or no visible objects, metrics reflect 0
   const peopleCount = isSourceStreaming ? currentActivePeople : (activeCams > 0 ? (analytics?.people_count ?? 0) : 0);
   const vehicleCount = isSourceStreaming ? currentActiveVehicles : (activeCams > 0 ? (analytics?.vehicle_count ?? 0) : 0);
+  const animalCount = isSourceStreaming ? currentActiveAnimals : 0;
   const loiteringCount = activeCams > 0 ? (analytics?.loitering_count ?? sourceAlerts.filter((a) => a.event_type === 'LOITERING').length) : 0;
 
   const criticalAlerts = sourceAlerts.filter((a) => a.threat_level === 'CRITICAL' && a.status !== 'RESOLVED');
@@ -80,7 +85,7 @@ export default function Dashboard() {
   const detections = useStore((s) => s.detections);
   const avgConfidenceStr = detections.length > 0
     ? `${(detections.reduce((sum, d) => sum + (typeof d.confidence === 'number' ? d.confidence : 0), 0) / detections.length).toFixed(1)}%`
-    : '98.7%';
+    : '0.0%';
 
   // Threat Breakdown for Donut Chart
   const tb = analytics?.threat_breakdown;

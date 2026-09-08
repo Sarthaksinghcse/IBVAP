@@ -57,10 +57,10 @@ class Detection:
 class Detector:
     """
     YOLOv8 Object Detector for IBVAP Surveillance.
-    Loads yolov8n.pt and executes frame inference.
+    Loads yolov8n.pt and executes frame inference with high sensitivity.
     """
 
-    def __init__(self, model_path: str = "E:/IBVAP/models/yolov8n.pt", conf_threshold: float = 0.45):
+    def __init__(self, model_path: str = "E:/IBVAP/models/yolov8n.pt", conf_threshold: float = 0.30):
         # Resolve path relative to IBVAP if needed
         if not os.path.isabs(model_path):
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -87,7 +87,7 @@ class Detector:
             logger.error(f"[Detector] Failed to load YOLO model: {e}")
             raise e
 
-    def detect(self, frame, camera_id: str = "BOP-07", track: bool = True) -> List[Detection]:
+    def detect(self, frame, camera_id: str = "BOP-07", track: bool = True, conf_threshold: Optional[float] = None) -> List[Detection]:
         """
         Run detection and tracking on a single BGR OpenCV frame.
         
@@ -95,6 +95,7 @@ class Detector:
             frame: OpenCV numpy image (H, W, 3)
             camera_id: Camera identifier (e.g. "BOP-07")
             track: Whether to enable persistent tracking across frames
+            conf_threshold: Optional dynamic confidence threshold override (0.0 - 1.0)
 
         Returns:
             List of normalized Detection objects
@@ -107,21 +108,22 @@ class Detector:
             return []
 
         detections: List[Detection] = []
+        effective_conf = conf_threshold if conf_threshold is not None else self.conf_threshold
 
         try:
             if track:
                 results = self.model.track(
                     source=frame,
                     persist=True,
-                    conf=self.conf_threshold,
-                    classes=list(ALL_SUPPORTED_CLASSES),
+                    conf=effective_conf,
+                    imgsz=640,
                     verbose=False
                 )
             else:
                 results = self.model.predict(
                     source=frame,
-                    conf=self.conf_threshold,
-                    classes=list(ALL_SUPPORTED_CLASSES),
+                    conf=effective_conf,
+                    imgsz=640,
                     verbose=False
                 )
 
@@ -141,23 +143,29 @@ class Detector:
                 if box.id is not None:
                     track_id = int(box.id[0].item())
 
-                # Map Class to Standard Object Type
-                if cls_id in COCO_PERSON_IDS:
+                # Resolve actual class name from YOLO model names
+                model_names = getattr(self.model, "names", {})
+                raw_name = model_names.get(cls_id, str(cls_id)).strip()
+
+                if cls_id in COCO_PERSON_IDS or raw_name.lower() == "person":
                     object_type = "PERSON"
                     object_label = f"Person #{track_id if track_id is not None else i+1}"
                     event_type = "PERSON_DETECTED"
-                elif cls_id in COCO_VEHICLE_IDS:
-                    object_type = "VEHICLE"
-                    vtype = COCO_VEHICLE_IDS[cls_id].title()
-                    object_label = f"{vtype} #{track_id if track_id is not None else i+1}"
-                    event_type = "VEHICLE_DETECTED"
-                elif cls_id in COCO_ANIMAL_IDS:
-                    object_type = "ANIMAL"
-                    atype = COCO_ANIMAL_IDS[cls_id].title()
-                    object_label = f"{atype} #{track_id if track_id is not None else i+1}"
-                    event_type = "PERSON_DETECTED" # mapped event
+                elif cls_id in COCO_VEHICLE_IDS or raw_name.lower() in ["car", "motorcycle", "bicycle", "bus", "truck", "airplane", "train", "boat"]:
+                    vtype = COCO_VEHICLE_IDS.get(cls_id, raw_name.upper())
+                    object_type = vtype
+                    object_label = f"{vtype.title()} #{track_id if track_id is not None else i+1}"
+                    event_type = f"{vtype}_DETECTED"
+                elif cls_id in COCO_ANIMAL_IDS or raw_name.lower() in ["bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"]:
+                    atype = COCO_ANIMAL_IDS.get(cls_id, raw_name.upper())
+                    object_type = atype
+                    object_label = f"{atype.title()} #{track_id if track_id is not None else i+1}"
+                    event_type = f"{atype}_DETECTED"
                 else:
-                    continue
+                    cname = raw_name.upper()
+                    object_type = cname
+                    object_label = f"{raw_name.title()} #{track_id if track_id is not None else i+1}"
+                    event_type = f"{cname}_DETECTED"
 
                 # Pixel coordinates [x1, y1, x2, y2]
                 xyxy = box.xyxy[0].tolist()
@@ -187,6 +195,7 @@ class Detector:
                     raw_xyxy=[x1, y1, x2, y2]
                 )
                 detections.append(det)
+                logger.info(f"[YOLO] class={object_type.lower()} confidence={conf:.1f}% bbox={bbox}")
 
         except Exception as e:
             logger.error(f"[Detector] Inference error: {e}")

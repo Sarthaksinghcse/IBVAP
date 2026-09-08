@@ -11,7 +11,7 @@ import {
   getTotalCamerasCount,
   isWebcamStreamConnected,
 } from '../store/useStore';
-import { Camera as CameraIcon, WifiOff, Video, Smartphone, Plus, Radio, ShieldAlert } from 'lucide-react';
+import { Camera as CameraIcon, WifiOff, Video, Smartphone, Plus, Radio, ShieldAlert, Usb } from 'lucide-react';
 import * as api from '../services/api';
 import type { CameraSourceType } from '../types';
 
@@ -116,11 +116,20 @@ export default function Cameras() {
 
           <button
             type="button"
+            onClick={() => handleOpenAddModal('USB_PHONE')}
+            className="px-3.5 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+          >
+            <Usb size={13} />
+            <span>+ Connect USB Phone</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => handleOpenAddModal('PHONE')}
             className="px-3.5 py-1.5 rounded-xl bg-amber-600/90 hover:bg-amber-600 text-white text-xs font-semibold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
           >
             <Smartphone size={13} />
-            <span>+ Connect Phone / Wi-Fi</span>
+            <span>+ Connect Wi-Fi Phone</span>
           </button>
 
           <button
@@ -193,12 +202,12 @@ export default function Cameras() {
           <div className="space-y-1">
             <h3 className="text-base font-bold text-white light:text-slate-900">No cameras connected</h3>
             <p className="text-xs text-[#9aa2b5] light:text-slate-500 max-w-md mx-auto leading-relaxed">
-              At startup, SHIELD starts with zero predefined cameras. Connect physical CCTV feeds, mobile phone cameras over Wi-Fi, or this computer's built-in webcam.
+              At startup, SHIELD starts with zero predefined cameras. Connect physical CCTV feeds, smartphone cameras via USB cable or Wi-Fi, or this computer's built-in webcam.
             </p>
           </div>
 
-          {/* Quick Onboarding 3-Card Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-left max-w-3xl mx-auto pt-2">
+          {/* Quick Onboarding 4-Card Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-left max-w-5xl mx-auto pt-2">
             {/* 1. CCTV Card */}
             <div
               onClick={() => handleOpenAddModal('CCTV')}
@@ -208,7 +217,7 @@ export default function Cameras() {
                 <Video size={18} />
               </div>
               <h4 className="text-sm font-semibold text-white light:text-slate-900 group-hover:text-emerald-400 light:group-hover:text-emerald-700 transition-colors">
-                Add CCTV Camera
+                CCTV Camera
               </h4>
               <p className="text-[11px] text-[#9aa2b5] light:text-slate-500 mt-1 leading-relaxed">
                 Connect physical IP/CCTV surveillance cameras via RTSP or ONVIF stream URLs.
@@ -218,8 +227,26 @@ export default function Cameras() {
               </span>
             </div>
 
+            {/* 2. USB Phone Card (Physical Data Cable) */}
+            <div
+              onClick={() => handleOpenAddModal('USB_PHONE')}
+              className="p-4 rounded-xl bg-[#191c24] light:bg-slate-50 border border-[#272b37] light:border-[#d3d8e3] hover:border-cyan-500/50 light:hover:border-cyan-500/50 transition-all cursor-pointer group"
+            >
+              <div className="w-9 h-9 rounded-lg bg-cyan-500/15 light:bg-cyan-100 border border-cyan-500/30 light:border-cyan-300 flex items-center justify-center text-cyan-400 light:text-cyan-700 mb-3 group-hover:scale-105 transition-transform">
+                <Usb size={18} />
+              </div>
+              <h4 className="text-sm font-semibold text-white light:text-slate-900 group-hover:text-cyan-400 light:group-hover:text-cyan-700 transition-colors">
+                USB Phone Camera
+              </h4>
+              <p className="text-[11px] text-[#9aa2b5] light:text-slate-500 mt-1 leading-relaxed">
+                Physical USB data cable connection via ADB port forwarding. Zero Wi-Fi lag.
+              </p>
+              <span className="inline-block mt-3 text-[11px] font-mono text-cyan-400 light:text-cyan-700 group-hover:underline font-semibold">
+                + Connect USB Phone →
+              </span>
+            </div>
 
-            {/* 2. Phone Wi-Fi Card */}
+            {/* 3. Phone Wi-Fi Card */}
             <div
               onClick={() => handleOpenAddModal('PHONE')}
               className="p-4 rounded-xl bg-[#191c24] light:bg-slate-50 border border-[#272b37] light:border-[#d3d8e3] hover:border-amber-500/50 light:hover:border-amber-500/50 transition-all cursor-pointer group"
@@ -228,17 +255,17 @@ export default function Cameras() {
                 <Smartphone size={18} />
               </div>
               <h4 className="text-sm font-semibold text-white light:text-slate-900 group-hover:text-amber-400 light:group-hover:text-amber-700 transition-colors">
-                Phone / Wi-Fi Camera
+                Wi-Fi Phone
               </h4>
               <p className="text-[11px] text-[#9aa2b5] light:text-slate-500 mt-1 leading-relaxed">
-                Turn any Android/iPhone into an AI security camera via local Wi-Fi IP webcam stream.
+                Stream Android/iPhone physical camera feed over your local Wi-Fi router.
               </p>
               <span className="inline-block mt-3 text-[11px] font-mono text-amber-400 light:text-amber-700 group-hover:underline font-semibold">
-                + Connect Phone →
+                + Connect Wi-Fi →
               </span>
             </div>
 
-            {/* 3. Laptop Webcam Card */}
+            {/* 4. Laptop Webcam Card */}
             <div
               onClick={() => handleOpenAddModal('WEBCAM')}
               className="p-4 rounded-xl bg-[#191c24] light:bg-slate-50 border border-[#272b37] light:border-[#d3d8e3] hover:border-emerald-500/50 light:hover:border-emerald-500/50 transition-all cursor-pointer group"

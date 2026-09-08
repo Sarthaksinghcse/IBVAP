@@ -14,14 +14,10 @@ export default function LiveMonitoring() {
   const setDetections  = useStore((s) => s.setDetections);
 
   useEffect(() => {
+    // Zero preloaded detections for live cameras.
+    // Live detection events arrive strictly in real-time from active frames via WebSocket.
     if (!activeVideoUrl) {
-      api.getDetections(selectedCamId, undefined, 100)
-        .then((dets) => {
-          if (dets && dets.length > 0) {
-            setDetections(dets);
-          }
-        })
-        .catch((e) => console.warn('[LiveMonitoring] Failed to fetch initial detections:', e));
+      setDetections([]);
     }
   }, [selectedCamId, activeVideoUrl, setDetections]);
 

@@ -1,12 +1,12 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { Loader2, Camera, Video, VideoOff, AlertCircle, RotateCcw, ArrowLeft, ShieldAlert, LayoutGrid, Maximize2, Plus, WifiOff } from 'lucide-react';
+import { Loader2, Camera, Video, VideoOff, AlertCircle, RotateCcw, ArrowLeft, ShieldAlert, LayoutGrid, Maximize2, Plus, WifiOff, Usb } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { LiveBadge } from '../ui/Badge';
 import { ZoneEditorModal } from '../monitoring/ZoneEditorModal';
 import { AddCameraModal } from '../cameras/AddCameraModal';
 import { MultiCameraGrid } from './MultiCameraGrid';
 import * as api from '../../services/api';
-import type { Detection, Zone } from '../../types';
+import type { Detection, Zone, CameraSourceType } from '../../types';
 
 
 
@@ -14,28 +14,29 @@ import type { Detection, Zone } from '../../types';
 function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfidence?: boolean }) {
   const isIntrusion = det.is_in_restricted_zone;
   const isLoitering = det.loitering_duration && det.loitering_duration > 0;
-  const isVehicle   = det.object_type === 'VEHICLE';
+  const isVehicle   = ['VEHICLE', 'CAR', 'TRUCK', 'BUS', 'MOTORCYCLE', 'BICYCLE'].includes(det.object_type);
+  const isAnimal    = ['ANIMAL', 'DOG', 'CAT', 'BIRD', 'HORSE', 'COW', 'SHEEP'].includes(det.object_type);
   const faceMatch   = det.face_match;
   const isWatchlist = Boolean(faceMatch && faceMatch.is_match);
   const isUnknownFace = Boolean(faceMatch && !faceMatch.is_match && faceMatch.person_name === 'UNKNOWN');
   const plateInfo   = det.plate_info;
 
-  const boxClass    = isWatchlist ? 'border-red-600 animate-pulse ring-2 ring-red-500' : isIntrusion ? 'bbox-intrusion' : isLoitering ? 'bbox-loitering' : isVehicle ? 'bbox-vehicle' : 'bbox-person';
-  const labelBg     = isWatchlist ? 'bg-red-700' : isIntrusion ? 'bg-red-500' : isLoitering ? 'bg-orange-500' : isVehicle ? 'bg-blue-500' : 'bg-green-600';
-  const cornerColor = isWatchlist ? '#dc2626' : isIntrusion ? '#ef4444' : isVehicle ? '#3b82f6' : '#22c55e';
+  const boxClass    = isWatchlist ? 'border-red-600 animate-pulse ring-2 ring-red-500' : isIntrusion ? 'bbox-intrusion' : isLoitering ? 'bbox-loitering' : isVehicle ? 'bbox-vehicle' : isAnimal ? 'border-amber-400 bg-amber-500/10' : 'bbox-person';
+  const labelBg     = isWatchlist ? 'bg-red-700' : isIntrusion ? 'bg-red-500' : isLoitering ? 'bg-orange-500' : isVehicle ? 'bg-blue-600' : isAnimal ? 'bg-amber-600' : 'bg-green-600';
+  const cornerColor = isWatchlist ? '#dc2626' : isIntrusion ? '#ef4444' : isVehicle ? '#3b82f6' : isAnimal ? '#d97706' : '#22c55e';
 
   return (
     <div className={`absolute border-2 ${boxClass} pointer-events-none`} style={{ left: `${det.bbox.x}%`, top: `${det.bbox.y}%`, width: `${det.bbox.w}%`, height: `${det.bbox.h}%` }}>
       {[{top:-1,left:-1,borderTop:`2px solid ${cornerColor}`,borderLeft:`2px solid ${cornerColor}`},{top:-1,right:-1,borderTop:`2px solid ${cornerColor}`,borderRight:`2px solid ${cornerColor}`},{bottom:-1,left:-1,borderBottom:`2px solid ${cornerColor}`,borderLeft:`2px solid ${cornerColor}`},{bottom:-1,right:-1,borderBottom:`2px solid ${cornerColor}`,borderRight:`2px solid ${cornerColor}`}].map((s,i)=>(<span key={i} className="absolute w-2 h-2" style={s}/>))}
       <div className={`absolute -top-5 left-0 ${labelBg} text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap flex items-center gap-1 shadow-md`}>
-        <span>{isWatchlist && faceMatch ? `🔴 WATCHLIST: ${faceMatch.person_name}` : det.object_id}</span>
+        <span>{isWatchlist && faceMatch ? `🔴 WATCHLIST: ${faceMatch.person_name}` : (det.object_id || 'OBJECT').toUpperCase()}</span>
         {showConfidence && (
           <>
-            <span className="opacity-75">•</span>
+            <span className="opacity-75">—</span>
             <span>{isWatchlist && faceMatch ? `${faceMatch.similarity.toFixed(1)}% match` : `${typeof det.confidence==='number'?det.confidence.toFixed(1):det.confidence}%`}</span>
           </>
         )}
-        {isIntrusion && <span className="ml-1 bg-red-700/90 px-1 rounded-xs">🚨 ZONE INTRUSION</span>}
+        {isIntrusion && <span className="ml-1 bg-red-700/90 px-1 rounded-xs">🚨 [RESTRICTED]</span>}
         {isUnknownFace && !isWatchlist && <span className="ml-1 bg-slate-700/80 px-1 rounded-xs text-[8px]">👤 FACE: UNKNOWN</span>}
         {isVehicle && plateInfo && plateInfo.plate_status === 'READABLE' && plateInfo.plate_text && (
           <span className="ml-1 bg-white text-slate-900 font-bold px-1.5 py-0.2 rounded-xs text-[8px] flex items-center gap-1 shadow-sm border border-slate-300">
@@ -44,7 +45,13 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
             {plateInfo.plate_confidence != null && <span className="text-slate-600 font-medium">• OCR: {plateInfo.plate_confidence.toFixed(1)}%</span>}
           </span>
         )}
-        {isVehicle && plateInfo && (plateInfo.plate_status === 'UNREADABLE' || plateInfo.plate_status === 'UNCERTAIN') && (
+        {isVehicle && plateInfo && plateInfo.plate_status === 'READING' && (
+          <span className="ml-1 bg-sky-500/20 text-sky-300 border border-sky-500/50 px-1 rounded-xs text-[8px] flex items-center gap-1 animate-pulse">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
+            <span>Plate: Reading...</span>
+          </span>
+        )}
+        {isVehicle && plateInfo && plateInfo.plate_status === 'UNREADABLE' && (
           <span className="ml-1 bg-amber-500/20 text-amber-300 border border-amber-500/50 px-1 rounded-xs text-[8px]">
             🏷️ PLATE: UNREADABLE
           </span>
@@ -72,6 +79,11 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
                   <span className="text-slate-300 text-[7px]">OCR: {plateInfo.plate_confidence.toFixed(1)}%</span>
                 )}
               </>
+            ) : plateInfo.plate_status === 'READING' ? (
+              <span className="text-sky-300 text-[7px] flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-sky-400 animate-ping" />
+                Plate: Reading...
+              </span>
             ) : (
               <span className="text-amber-300 text-[7px]">PLATE: UNREADABLE</span>
             )}
@@ -149,7 +161,9 @@ export function CCTVPanel() {
   const setActiveVideoId  = useStore((s) => s.setActiveVideoId);
   const setDetections     = useStore((s) => s.setDetections);
   const setActiveTracksForSource = useStore((s) => s.setActiveTracksForSource);
+  const updateCamera             = useStore((s) => s.updateCamera);
   const videoAnalysisMetrics     = useStore((s) => s.videoAnalysisMetrics);
+  const [streamVersion, setStreamVersion] = useState(0);
 
 
 
@@ -159,6 +173,7 @@ export function CCTVPanel() {
   const fetchZones        = useStore((s) => s.fetchZones);
   const [isZoneEditorOpen, setIsZoneEditorOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addModalSourceType, setAddModalSourceType] = useState<CameraSourceType>('CCTV');
   const [modalSource, setModalSource] = useState<{ id: string; type: 'CAMERA' | 'WEBCAM' | 'VIDEO' } | null>(null);
   const [viewMode, setViewMode] = useState<'FOCUS' | 'GRID'>('FOCUS');
 
@@ -284,7 +299,90 @@ export function CCTVPanel() {
   const setSystemStatus   = useStore((s) => s.setSystemStatus);
   const addDetection      = useStore((s) => s.addDetection);
 
-  // Real Laptop Webcam YOLOv8 AI Inference Loop (~8 FPS, 640x360, async lock, sequence ordering)
+  // Connection and Live AI State
+  const [liveAiState, setLiveAiState] = useState<'IDLE' | 'PROCESSING' | 'OFFLINE'>('IDLE');
+
+  const cameraConnectionState = useMemo<
+    'CONNECTING' | 'CONNECTED' | 'AI PROCESSING' | 'AI OFFLINE' | 'DISCONNECTED' | 'ERROR'
+  >(() => {
+    if (cameraLoading) return 'CONNECTING';
+    if (cameraError) return 'ERROR';
+    if (!activeCameraStream) return 'DISCONNECTED';
+    if (liveAiState === 'PROCESSING') return 'AI PROCESSING';
+    if (liveAiState === 'OFFLINE') return 'AI OFFLINE';
+    return 'CONNECTED';
+  }, [cameraLoading, cameraError, activeCameraStream, liveAiState]);
+
+  // Live Camera Runtime Metrics (Camera FPS, AI FPS, Latency ms)
+  const [liveCamMetrics, setLiveCamMetrics] = useState<{
+    camera_fps: number;
+    ai_fps: number;
+    latency_ms: number;
+    dropped_stale_frames: number;
+    active_tracks: number;
+    ai_status: string;
+    rotation?: number;
+  } | null>(null);
+
+  const currentRotation = selectedCam?.rotation ?? liveCamMetrics?.rotation ?? 0;
+
+  const handleCycleRotation = async () => {
+    if (!selectedCamId) return;
+    const nextRot = (currentRotation + 90) % 360;
+    try {
+      updateCamera(selectedCamId, { rotation: nextRot });
+      await api.setCameraRotation(selectedCamId, nextRot);
+      setStreamVersion((v) => v + 1);
+    } catch (err) {
+      console.warn('[CCTVPanel] Error rotating camera:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (!isCctvLive || !selectedCamId || isCameraMode || isVideoReady) {
+      setLiveCamMetrics(null);
+      return;
+    }
+    let isMounted = true;
+    const fetchMetrics = async () => {
+      try {
+        const res = await fetch(`/api/cameras/${selectedCamId}/metrics`);
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted) setLiveCamMetrics(data);
+        }
+      } catch (e) {
+        // network or server starting
+      }
+    };
+    fetchMetrics();
+    const timer = setInterval(fetchMetrics, 1500);
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, [isCctvLive, selectedCamId, isCameraMode, isVideoReady]);
+
+  // Bind live camera MediaStream to video element
+  useEffect(() => {
+    if (isCameraMode && cameraVideoRef.current) {
+      if (activeCameraStream) {
+        console.log('[LIVE] Camera connected', {
+          id: activeCameraStream.id,
+          tracks: activeCameraStream.getVideoTracks().map((t) => t.label),
+        });
+        cameraVideoRef.current.srcObject = activeCameraStream;
+        cameraVideoRef.current.play().catch((err) => {
+          console.warn('[CCTVPanel] Camera stream play error:', err);
+        });
+      } else {
+        cameraVideoRef.current.srcObject = null;
+        setLiveAiState('IDLE');
+      }
+    }
+  }, [isCameraMode, activeCameraStream]);
+
+  // Real Live Camera YOLOv8 AI Inference Loop (~8 FPS, 640x360, async lock, sequence ordering)
   useEffect(() => {
     if (!isCameraMode || !activeCameraStream) {
       // Only reset refs — NO Zustand state mutations here (they cause infinite loops)
@@ -321,10 +419,14 @@ export function CCTVPanel() {
 
         frameSeqRef.current += 1;
         const currentSeq = frameSeqRef.current;
+        console.log('[LIVE] Frame captured', { width: 640, height: 360, seq: currentSeq });
+
         const confThreshold = (settings.aiThreshold || 50) / 100;
         const faceEnabled = settings.faceRecognitionEnabled ?? true;
         const faceThreshold = (settings.faceMatchThreshold ?? 45) / 100;
         const anprEnabled = settings.anprEnabled ?? true;
+
+        console.log('[LIVE] Frame sent for inference', { seq: currentSeq, camera_id: activeSourceId });
 
         const res = await api.inferWebcamFrame(
           base64Data,
@@ -332,22 +434,29 @@ export function CCTVPanel() {
           currentSeq,
           faceEnabled,
           faceThreshold,
-          anprEnabled
+          anprEnabled,
+          activeSourceId
         );
-
-
 
         if (!isMounted) return;
 
-        // Mark AI as running on first successful response
-        if (!webcamAiActiveRef.current) {
-          webcamAiActiveRef.current = true;
-          setSystemStatus({ ai_engine_status: 'RUNNING' });
+        if (res && res.error) {
+          console.warn('[YOLO] Inference error:', res.error);
+          setLiveAiState('OFFLINE');
+        } else if (res) {
+          setLiveAiState('PROCESSING');
+          // Mark AI as running on first successful response
+          if (!webcamAiActiveRef.current) {
+            webcamAiActiveRef.current = true;
+            setSystemStatus({ ai_engine_status: 'RUNNING' });
+          }
         }
 
         if (res && res.frame_seq >= latestRenderedSeqRef.current) {
           latestRenderedSeqRef.current = res.frame_seq;
           const allDets = (res.detections || []) as Detection[];
+          console.log('[UI] Detection received', { count: allDets.length, camera_id: activeSourceId, seq: res.frame_seq });
+
           const threshold = settings.aiThreshold || 50;
           const filtered = allDets.filter(
             (d) => typeof d.confidence === 'number' && d.confidence >= threshold
@@ -355,7 +464,7 @@ export function CCTVPanel() {
 
           // Update bounding boxes (local state only — no Zustand array replacement)
           setActiveFrameDetections(filtered);
-          setActiveTracksForSource('WEBCAM-01', filtered);
+          setActiveTracksForSource(activeSourceId, filtered);
 
           // Push significant events into store using addDetection (append, not replace)
           const now = Date.now() / 1000;
@@ -385,6 +494,7 @@ export function CCTVPanel() {
         }
       } catch (err) {
         console.warn('[WebcamAI] Inference loop error:', err);
+        if (isMounted) setLiveAiState('OFFLINE');
       } finally {
         inFlightRef.current = false;
       }
@@ -395,10 +505,11 @@ export function CCTVPanel() {
       clearInterval(intervalId);
       // Cleanup: NO state mutations — refs only, to avoid triggering re-renders
       webcamAiActiveRef.current = false;
-      setActiveTracksForSource('WEBCAM-01', []);
-      api.resetWebcamSession().catch(() => {});
+      setLiveAiState('IDLE');
+      setActiveTracksForSource(activeSourceId, []);
+      api.resetWebcamSession(activeSourceId).catch(() => {});
     };
-  }, [isCameraMode, activeCameraStream, settings.aiThreshold, setSystemStatus, addDetection, setActiveTracksForSource]);
+  }, [isCameraMode, activeCameraStream, activeSourceId, settings.aiThreshold, settings.faceRecognitionEnabled, settings.faceMatchThreshold, settings.anprEnabled, setSystemStatus, addDetection, setActiveTracksForSource]);
 
   // Frame sync loop using requestAnimationFrame for Uploaded Videos / CCTV
   useEffect(() => {
@@ -407,9 +518,13 @@ export function CCTVPanel() {
     }
 
     if (isCctvLive) {
-      const liveDets = detections.filter((d) => d.camera_id === selectedCamId && !d.video_id).slice(0, 5);
-      setActiveFrameDetections(liveDets);
-      if (selectedCamId) setActiveTracksForSource(selectedCamId, liveDets);
+      const nowMs = Date.now();
+      // Only consider real detections within the last 3.5s as currently visible/active
+      const recentLiveDets = detections.filter(
+        (d) => d.camera_id === selectedCamId && !d.video_id && (nowMs - new Date(d.timestamp).getTime()) < 3500
+      );
+      setActiveFrameDetections([]); // Live MJPEG stream paints bounding boxes directly on video canvas
+      if (selectedCamId) setActiveTracksForSource(selectedCamId, recentLiveDets);
       return;
     }
 
@@ -452,7 +567,7 @@ export function CCTVPanel() {
     return () => cancelAnimationFrame(animId);
   }, [isCctvLive, isCameraMode, isVideoReady, videoDetsSorted, frameDuration, detections, selectedCamId, activeVideoId, settings.aiThreshold, setActiveTracksForSource]);
 
-  const handleResetToLive = async () => {
+  const handleResetToLive = () => {
     setActiveVideoUrl(null);
     setActiveVideoId(null);
     setUploadedName(null);
@@ -461,16 +576,12 @@ export function CCTVPanel() {
     setVideoDuration(0);
     setActiveFrameDetections([]);
     setCameraMode(false);
-    try {
-      const liveDets = await api.getDetections(selectedCamId);
-      setDetections(liveDets);
-    } catch (e) {
-      console.warn('[CCTVPanel] Failed to reload live detections:', e);
-    }
+    setDetections([]); // Zero preloaded detections for clean live start
   };
 
   const handleEnterCameraMode = async () => {
     setCameraMode(true);
+    setDetections([]);
     await startDeviceCamera();
     enumerateCameraDevices().catch(() => {});
   };
@@ -480,6 +591,8 @@ export function CCTVPanel() {
     stopDeviceCamera();
     setCameraMode(false);
     setActiveFrameDetections([]);
+    setActiveTracksForSource('WEBCAM-01', []);
+    setDetections([]);
   };
 
   const handleStopCamera = () => {
@@ -506,15 +619,30 @@ export function CCTVPanel() {
             <>
               <span className="text-sm font-semibold text-white light:text-slate-900 flex items-center gap-1.5">
                 <Camera size={15} className="text-emerald-400 light:text-[#15803d]" />
-                Browser Device Camera
+                Live Camera ({activeSourceId})
               </span>
               <span className="text-[#62697b] light:text-slate-400">•</span>
               <span className="text-xs text-[#9aa2b5] light:text-slate-600">
                 {cameraResolution || 'Webcam Stream'}
               </span>
-              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 light:bg-emerald-100 light:text-emerald-700 text-[10px] font-mono font-bold uppercase flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                DEVICE INPUT
+              <span className={`px-2 py-0.5 rounded border text-[10px] font-mono font-bold uppercase flex items-center gap-1.5 ${
+                cameraConnectionState === 'AI PROCESSING'
+                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400 light:bg-emerald-100 light:text-emerald-700'
+                  : cameraConnectionState === 'AI OFFLINE'
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-400 light:bg-amber-100 light:text-amber-700'
+                  : cameraConnectionState === 'CONNECTING'
+                  ? 'bg-blue-500/20 border-blue-500/50 text-blue-400 light:bg-blue-100 light:text-blue-700'
+                  : cameraConnectionState === 'ERROR'
+                  ? 'bg-red-500/20 border-red-500/50 text-red-400 light:bg-red-100 light:text-red-700'
+                  : 'bg-slate-800/40 border-slate-700 text-slate-400 light:bg-slate-100 light:text-slate-600'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  cameraConnectionState === 'AI PROCESSING' ? 'bg-emerald-400 animate-pulse' :
+                  cameraConnectionState === 'AI OFFLINE' ? 'bg-amber-400' :
+                  cameraConnectionState === 'CONNECTING' ? 'bg-blue-400 animate-pulse' :
+                  cameraConnectionState === 'ERROR' ? 'bg-red-400' : 'bg-slate-400'
+                }`} />
+                {cameraConnectionState}
               </span>
             </>
           ) : (
@@ -524,6 +652,11 @@ export function CCTVPanel() {
               <span className="text-xs text-[#9aa2b5] light:text-slate-600">
                 {(isAnalyzing||isVideoReady)&&uploadedVideoName ? uploadedVideoName : (selectedCam?.location||'Unknown')}
               </span>
+              {selectedCam?.source_type === 'USB_PHONE' && !isAnalyzing && !isVideoReady && (
+                <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 light:bg-cyan-100 light:text-cyan-800 text-[10px] font-mono font-bold uppercase flex items-center gap-1">
+                  <Usb size={10} /> USB PHONE
+                </span>
+              )}
               {isAnalyzing&&(<span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-400 light:bg-amber-100 light:text-amber-700 text-[10px] font-mono font-bold uppercase flex items-center gap-1"><Loader2 size={9} className="animate-spin"/>ANALYZING</span>)}
               {isVideoReady&&(<span className="px-1.5 py-0.5 rounded bg-blue-500/20 border border-blue-500/40 text-blue-400 light:bg-blue-100 light:text-blue-700 text-[10px] font-mono font-bold uppercase">CCTV CLIP</span>)}
               {hasIntrusion&&(<span className="px-1.5 py-0.5 rounded bg-red-500/15 border border-red-500/30 text-red-400 light:bg-red-100 light:text-red-700 text-[10px] font-mono font-bold uppercase animate-pulse">🚨 INTRUSION</span>)}
@@ -640,6 +773,19 @@ export function CCTVPanel() {
                 </div>
               )}
 
+              {/* Camera Orientation / Rotation Toggle Button */}
+              {isCctvLive && selectedCam && (
+                <button
+                  type="button"
+                  onClick={handleCycleRotation}
+                  className="text-[10px] font-mono px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs font-semibold bg-[#191c24] light:bg-slate-100 hover:bg-slate-700 light:hover:bg-slate-200 text-slate-300 light:text-slate-700 border-[#272b37] light:border-[#d9dde3]"
+                  title="Rotate Camera Stream 90° (0°, 90°, 180°, 270°)"
+                >
+                  <RotateCcw size={12} className="text-cyan-400" />
+                  <span>{currentRotation}°</span>
+                </button>
+              )}
+
               {/* Zone Configuration Button */}
               <button
                 type="button"
@@ -658,7 +804,17 @@ export function CCTVPanel() {
                 <span>{hasZoneConfigured ? activeZone.name : 'Configure Zone'}</span>
               </button>
 
-              <span className="text-[10px] font-mono text-[#9aa2b5] light:text-slate-500 font-medium">{systemStatus.fps.toFixed(1)} FPS • {systemStatus.processing_time_ms}ms</span>
+              {isCctvLive && liveCamMetrics ? (
+                <span className="text-[10px] font-mono text-cyan-400 light:text-cyan-600 font-medium">
+                  {liveCamMetrics.ai_status === 'RUNNING' ? (
+                    <>CAM: {liveCamMetrics.camera_fps.toFixed(1)} FPS • AI: {liveCamMetrics.ai_fps.toFixed(1)} FPS • {liveCamMetrics.latency_ms.toFixed(0)}ms</>
+                  ) : (
+                    <span className="text-amber-400">AI PROCESSING: OFFLINE</span>
+                  )}
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-[#9aa2b5] light:text-slate-500 font-medium">{systemStatus.fps.toFixed(1)} FPS • {systemStatus.processing_time_ms}ms</span>
+              )}
               <LiveBadge/>
             </div>
           )}
@@ -750,7 +906,9 @@ export function CCTVPanel() {
                       playsInline
                       muted
                       onLoadedMetadata={() => requestAnimationFrame(() => updateContentRect())}
+                      onLoadedData={() => requestAnimationFrame(() => updateContentRect())}
                       onPlaying={() => requestAnimationFrame(() => updateContentRect())}
+                      onResize={() => requestAnimationFrame(() => updateContentRect())}
                       className="w-full h-full object-contain z-0"
                     />
                     <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-black/75 backdrop-blur-sm px-2.5 py-1 rounded border border-white/10 text-[10px] font-mono text-emerald-400 z-30 pointer-events-none">
@@ -812,7 +970,8 @@ export function CCTVPanel() {
             {/* ================= MODE 3: LIVE CCTV / PHONE STREAM PROXY ================= */}
             {isCctvLive && selectedCam?.stream_url && (
               <img
-                src={`/api/cameras/${selectedCamId}/stream`}
+                key={`${selectedCamId}-${streamVersion}-${currentRotation}`}
+                src={`/api/cameras/${selectedCamId}/stream?conf=${(settings.aiThreshold ?? 30) / 100}&rotate=${currentRotation}&v=${streamVersion}`}
                 alt={selectedCam.name}
                 className="w-full h-full object-contain z-0"
                 onError={(e) => {
@@ -829,9 +988,18 @@ export function CCTVPanel() {
                 </div>
                 <h4 className="text-sm font-semibold text-slate-200">No Cameras Connected</h4>
                 <p className="text-xs text-slate-400 mt-1 mb-4 leading-relaxed">
-                  SHIELD starts with zero predefined cameras. Connect a CCTV camera via RTSP, a phone camera over Wi-Fi, or your laptop webcam.
+                  SHIELD starts with zero predefined cameras. Connect an Android phone via USB cable, physical CCTV via RTSP, or your laptop webcam.
                 </p>
                 <div className="flex items-center gap-2 flex-wrap justify-center">
+                  <button
+                    onClick={() => {
+                      setAddModalSourceType('USB_PHONE');
+                      setIsAddModalOpen(true);
+                    }}
+                    className="text-xs py-1.5 px-3 rounded font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    <Usb size={13} /> + Connect USB Phone
+                  </button>
                   <button
                     onClick={handleEnterCameraMode}
                     className="text-xs py-1.5 px-3 rounded font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center gap-1 cursor-pointer"
@@ -839,10 +1007,13 @@ export function CCTVPanel() {
                     <Camera size={13} /> Use Laptop Webcam
                   </button>
                   <button
-                    onClick={() => setIsAddModalOpen(true)}
+                    onClick={() => {
+                      setAddModalSourceType('CCTV');
+                      setIsAddModalOpen(true);
+                    }}
                     className="text-xs py-1.5 px-3 rounded font-medium bg-[#1d6af5] hover:bg-[#1655c7] text-white transition-all flex items-center gap-1 cursor-pointer"
                   >
-                    <Video size={13} /> + Add Camera Feed
+                    <Video size={13} /> + Add CCTV Feed
                   </button>
                 </div>
               </div>
@@ -905,7 +1076,13 @@ export function CCTVPanel() {
         {/* Model name / Mode indicator */}
         <div className="absolute bottom-3 left-3 z-30 pointer-events-none">
           <span className="text-[9px] font-mono text-slate-300 bg-black/70 px-2 py-0.5 rounded border border-white/10">
-            {isCameraMode ? 'Local MediaStream (Direct Camera)' : systemStatus.model_name}
+            {isCameraMode
+              ? 'Local MediaStream (Direct Camera)'
+              : isCctvLive && liveCamMetrics
+              ? liveCamMetrics.ai_status === 'RUNNING'
+                ? `YOLOv8n Live • ${liveCamMetrics.active_tracks} Track${liveCamMetrics.active_tracks === 1 ? '' : 's'} • Latency ${liveCamMetrics.latency_ms.toFixed(0)}ms`
+                : 'AI PROCESSING: OFFLINE'
+              : systemStatus.model_name}
           </span>
         </div>
 
@@ -1000,6 +1177,7 @@ export function CCTVPanel() {
       <AddCameraModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
+        initialSourceType={addModalSourceType}
       />
     </div>
   );

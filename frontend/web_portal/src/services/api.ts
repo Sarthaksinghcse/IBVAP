@@ -1,5 +1,19 @@
 import axios from 'axios';
-import type { Alert, Detection, Camera, Video, Analytics, AlertStatus, Zone } from '../types';
+import type {
+  Alert,
+  Detection,
+  Camera,
+  Video,
+  Analytics,
+  AlertStatus,
+  Zone,
+  USBDetectResponse,
+  USBTestRequest,
+  USBTestResponse,
+  USBConnectRequest,
+  USBStatusResponse,
+  USBFindPortResponse,
+} from '../types';
 
 // ─── Axios Client ─────────────────────────────────────────────────────────────
 
@@ -34,6 +48,9 @@ export const updateCamera = (id: string, data: Partial<Camera>): Promise<Camera>
 export const deleteCamera = (id: string): Promise<{ status: string; message: string }> =>
   client.delete<{ status: string; message: string }>(`/api/cameras/${id}`).then((r) => r.data);
 
+export const setCameraRotation = (id: string, rotation: number): Promise<{ status: string; camera_id: string; rotation: number }> =>
+  client.post<{ status: string; camera_id: string; rotation: number }>(`/api/cameras/${id}/rotate`, { rotation }).then((r) => r.data);
+
 export interface StreamTestResponse {
   success: boolean;
   status: string;
@@ -51,6 +68,23 @@ export const testStream = (streamUrl: string, streamType: string = 'RTSP'): Prom
 export const discoverCameras = (): Promise<{ status: string; discovered_cameras: any[]; local_ip: string; message: string }> =>
   client.post('/api/cameras/discover').then((r) => r.data);
 
+// ─── USB Phone Camera Endpoints ───────────────────────────────────────────────
+
+export const detectUsbPhone = (): Promise<USBDetectResponse> =>
+  client.post<USBDetectResponse>('/api/cameras/usb/detect').then((r) => r.data);
+
+export const testUsbPhoneStream = (data: USBTestRequest): Promise<USBTestResponse> =>
+  client.post<USBTestResponse>('/api/cameras/usb/test', data).then((r) => r.data);
+
+export const connectUsbPhone = (data: USBConnectRequest): Promise<Camera> =>
+  client.post<Camera>('/api/cameras/usb/connect', data).then((r) => r.data);
+
+export const getUsbPhoneStatus = (): Promise<USBStatusResponse> =>
+  client.get<USBStatusResponse>('/api/cameras/usb/status').then((r) => r.data);
+
+export const findAvailableUsbPort = (preferred: number = 8090): Promise<USBFindPortResponse> =>
+  client.get<USBFindPortResponse>(`/api/cameras/usb/find-port?preferred=${preferred}`).then((r) => r.data);
+
 export interface WebcamInferResponse {
   detections: Detection[];
   frame_seq: number;
@@ -64,14 +98,15 @@ export const inferWebcamFrame = (
   frameSeq: number = 0,
   faceRecognitionEnabled: boolean = true,
   faceThreshold: number = 0.45,
-  anprEnabled: boolean = true
+  anprEnabled: boolean = true,
+  cameraId: string = 'WEBCAM-01'
 ): Promise<WebcamInferResponse> =>
   client
     .post<WebcamInferResponse>('/api/cameras/webcam/infer', {
       image_base64: imageBase64,
       conf_threshold: confThreshold,
       frame_seq: frameSeq,
-      camera_id: 'WEBCAM-01',
+      camera_id: cameraId,
       face_recognition_enabled: faceRecognitionEnabled,
       face_threshold: faceThreshold,
       anpr_enabled: anprEnabled,
@@ -80,8 +115,8 @@ export const inferWebcamFrame = (
 
 
 
-export const resetWebcamSession = (): Promise<{ status: string }> =>
-  client.post<{ status: string }>('/api/cameras/webcam/reset').then((r) => r.data);
+export const resetWebcamSession = (cameraId: string = 'WEBCAM-01'): Promise<{ status: string }> =>
+  client.post<{ status: string }>(`/api/cameras/webcam/reset?camera_id=${encodeURIComponent(cameraId)}`).then((r) => r.data);
 
 
 // ─── Alert Endpoints ──────────────────────────────────────────────────────────

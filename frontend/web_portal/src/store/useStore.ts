@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   alertSound: true,
   voiceAlerts: true,
   autoAcknowledge: false,
-  aiThreshold: 50,
+  aiThreshold: 30,
   loiteringThreshold: 15,
   storageRetention: 30,
   faceRecognitionEnabled: true,
@@ -444,10 +444,25 @@ export const useStore = create<IBVAPState>((set, get) => ({
   fetchCameras: async () => {
     try {
       const cams = await api.getCameras();
-      set((state) => ({
+      const currentSelected = get().selectedCameraId;
+      const targetCamId = currentSelected || (cams.length > 0 ? cams[0].id : '');
+      set({
         cameras: cams,
-        selectedCameraId: state.selectedCameraId || (cams.length > 0 ? cams[0].id : ''),
-      }));
+        selectedCameraId: targetCamId,
+      });
+      if (targetCamId) {
+        api.getDetections(targetCamId, undefined, 100)
+          .then((dets) => {
+            if (dets && dets.length > 0) {
+              set((state) => {
+                const existingIds = new Set(state.detections.map((d) => d.id));
+                const newDets = dets.filter((d) => !existingIds.has(d.id));
+                return { detections: [...newDets, ...state.detections].slice(0, 500) };
+              });
+            }
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       console.warn('[useStore] Failed to fetch cameras:', e);
     }
@@ -486,7 +501,22 @@ export const useStore = create<IBVAPState>((set, get) => ({
     set({ wsConnected }),
 
   // --- UI Actions ---
-  setSelectedCamera: (selectedCameraId) => set({ selectedCameraId }),
+  setSelectedCamera: (selectedCameraId) => {
+    set({ selectedCameraId });
+    if (selectedCameraId) {
+      api.getDetections(selectedCameraId, undefined, 100)
+        .then((dets) => {
+          if (dets && dets.length > 0) {
+            set((state) => {
+              const existingIds = new Set(state.detections.map((d) => d.id));
+              const newDets = dets.filter((d) => !existingIds.has(d.id));
+              return { detections: [...newDets, ...state.detections].slice(0, 500) };
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  },
   setSelectedAlert: (selectedAlertId) => set({ selectedAlertId }),
   setUploadProgress: (uploadProgress) => set({ uploadProgress }),
   setUploadStatus: (uploadStatus) => set({ uploadStatus }),

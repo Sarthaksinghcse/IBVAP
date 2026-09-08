@@ -68,7 +68,9 @@ export function announceVoiceAlert(alert: {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {
       const sourceLabel = alert.camera_id ? `at ${alert.camera_id}` : '';
-      const text = `Critical security alert. ${alert.object_id || 'Object'} detected in restricted zone ${sourceLabel}.`;
+      const text = alert.event_type === 'ZONE_INTRUSION'
+        ? `Warning. Person detected inside restricted zone ${sourceLabel}.`
+        : `Security alert. ${alert.object_id || 'Object'} detected in restricted zone ${sourceLabel}.`;
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 1.05;
       utterance.pitch = 1.0;

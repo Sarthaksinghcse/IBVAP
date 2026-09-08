@@ -32,6 +32,14 @@ export type EventType =
   | 'MOTORCYCLE_DETECTED'
   | 'BUS_DETECTED'
   | 'TRUCK_DETECTED'
+  | 'DOG_DETECTED'
+  | 'CAT_DETECTED'
+  | 'BIRD_DETECTED'
+  | 'HORSE_DETECTED'
+  | 'COW_DETECTED'
+  | 'SHEEP_DETECTED'
+  | 'ANIMAL_DETECTED'
+  | 'OBJECT_DETECTED'
   | 'SUSPICIOUS_ACTIVITY'
   | 'PERSON_TRACKED'
   | 'VEHICLE_TRACKED'
@@ -43,9 +51,10 @@ export type EventType =
   | 'FACE_DETECTED'
   | 'PLATE_DETECTED'
   | 'UNREADABLE_PLATE'
-  | 'WATCHLIST_PLATE_MATCH';
+  | 'WATCHLIST_PLATE_MATCH'
+  | (string & {});
 
-export type ObjectType = 'PERSON' | 'VEHICLE' | 'ANIMAL' | 'UNKNOWN';
+export type ObjectType = 'PERSON' | 'VEHICLE' | 'ANIMAL' | 'CAR' | 'TRUCK' | 'BUS' | 'MOTORCYCLE' | 'BICYCLE' | 'DOG' | 'CAT' | 'BIRD' | 'UNKNOWN' | (string & {});
 
 // ─── Face Recognition Models ──────────────────────────────────────────────────
 
@@ -92,7 +101,7 @@ export interface BoundingBox {
   h: number; // % of frame height
 }
 
-export type CameraSourceType = 'CCTV' | 'PHONE' | 'WEBCAM';
+export type CameraSourceType = 'CCTV' | 'PHONE' | 'WEBCAM' | 'USB_PHONE';
 
 export interface Camera {
   id: string;
@@ -107,6 +116,7 @@ export interface Camera {
   created_at?: string;
   fps?: number;
   resolution?: string;
+  rotation?: number;
 }
 
 
@@ -287,6 +297,79 @@ export interface TestANPRResult {
   cleaned_text?: string | null;
   message: string;
 }
+
+// ─── USB Phone Camera Interfaces ──────────────────────────────────────────────
+
+export interface USBDeviceItem {
+  serial: string;
+  state: string;
+  model: string;
+  product?: string;
+  usb_info?: string;
+  authorized: boolean;
+}
+
+export interface USBHardwareItem {
+  name: string;
+  instance_id?: string;
+  status?: string;
+}
+
+export interface USBDetectResponse {
+  adb_available: boolean;
+  adb_path?: string | null;
+  devices: USBDeviceItem[];
+  pnp_hardware_detected: USBHardwareItem[];
+  instructions: string[];
+}
+
+export interface USBTestRequest {
+  phone_port?: number;
+  local_port?: number;
+  stream_path?: string;
+  device_serial?: string;
+  auto_find_port?: boolean;
+}
+
+export interface USBTestResponse {
+  success: boolean;
+  message: string;
+  local_port?: number;
+  phone_port?: number;
+  resolution?: string;
+  stream_url?: string;
+  adb_forwarded: boolean;
+  frames_received?: boolean;
+}
+
+export interface USBConnectRequest {
+  name: string;
+  location?: string;
+  device_serial?: string;
+  phone_port?: number;
+  local_port?: number;
+  stream_path?: string;
+  app_type?: string;
+  auto_find_port?: boolean;
+}
+
+export interface USBFindPortResponse {
+  available_port: number;
+  preferred_port: number;
+}
+
+export interface USBStatusResponse {
+  connected: boolean;
+  device_count: number;
+  active_forwards: Array<{
+    serial?: string;
+    local_port: number;
+    phone_port: number;
+    forwarded_at: number;
+  }>;
+  adb_available: boolean;
+}
+
 
 
 

@@ -6,3 +6,7 @@ storage/
 runs/
 datasets/
 __pycache__/
+
+.env
+.env.*
+*.env

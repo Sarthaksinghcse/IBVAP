@@ -17,13 +17,14 @@ class Camera(Base):
     id            = Column(String, primary_key=True, default=_uid)
     name          = Column(String, nullable=False, unique=True, index=True)
     location      = Column(String, nullable=False, default="Surveillance Area")
-    source_type   = Column(String, default="CCTV")         # CCTV | PHONE | WEBCAM
+    source_type   = Column(String, default="CCTV")         # CCTV | PHONE | WEBCAM | USB_PHONE
     stream_url    = Column(String, nullable=True)          # rtsp://... | http://...
     stream_type   = Column(String, default="RTSP")         # RTSP | MJPEG | HTTP | WEBCAM
     status        = Column(String, default="ONLINE")       # ONLINE | OFFLINE | ERROR
     ai_status     = Column(String, default="STOPPED")      # RUNNING | STOPPED | ERROR
     fps           = Column(Float,  default=25.0)
     resolution    = Column(String, default="1920x1080")
+    rotation      = Column(Integer, default=0)             # 0 | 90 | 180 | 270
     last_activity = Column(DateTime, default=datetime.utcnow)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
@@ -71,6 +72,7 @@ class Detection(Base):
     is_in_restricted_zone = Column(Boolean, default=False)
     loitering_duration    = Column(Integer, nullable=True)
     timestamp             = Column(DateTime, default=datetime.utcnow, index=True)
+    session_id            = Column(String,  nullable=True, index=True)
     # ── Video-relative frame identity (populated only for uploaded-video detections) ──
     frame_index           = Column(Integer, nullable=True)   # 0-based frame counter
     video_time_sec        = Column(Float,   nullable=True)   # frame_index / source_fps
@@ -123,6 +125,7 @@ class Alert(Base):
     alert_id      = Column(String,  nullable=False, unique=True, index=True)
     camera_id     = Column(String,  ForeignKey("cameras.id"), nullable=False, index=True)
     video_id      = Column(String,  ForeignKey("videos.id"),  nullable=True, index=True)
+    session_id    = Column(String,  nullable=True, index=True)
     event_type    = Column(String,  nullable=False)
     object_type   = Column(String,  nullable=False)
     object_id     = Column(String,  nullable=False)

@@ -26,9 +26,10 @@ class CameraStatus(str, Enum):
     ERROR       = "ERROR"
 
 class CameraSourceType(str, Enum):
-    CCTV   = "CCTV"
-    PHONE  = "PHONE"
-    WEBCAM = "WEBCAM"
+    CCTV      = "CCTV"
+    PHONE     = "PHONE"
+    WEBCAM    = "WEBCAM"
+    USB_PHONE = "USB_PHONE"
 
 class AIStatus(str, Enum):
     RUNNING = "RUNNING"
@@ -66,6 +67,7 @@ class CameraCreate(BaseModel):
     status:      Optional[CameraStatus] = CameraStatus.ONLINE
     resolution:  Optional[str] = "1920x1080"
     fps:         Optional[float] = 25.0
+    rotation:    Optional[int] = 0
 
 class CameraUpdate(BaseModel):
     name:        Optional[str] = None
@@ -76,6 +78,10 @@ class CameraUpdate(BaseModel):
     stream_type: Optional[str] = None
     fps:         Optional[float] = None
     resolution:  Optional[str] = None
+    rotation:    Optional[int] = None
+
+class CameraRotateRequest(BaseModel):
+    rotation: int = 0  # 0, 90, 180, 270
 
 class StreamTestRequest(BaseModel):
     stream_url:  str
@@ -99,10 +105,71 @@ class CameraResponse(BaseModel):
     ai_status:     AIStatus
     fps:           Optional[float] = 25.0
     resolution:    Optional[str]   = "1920x1080"
+    rotation:      Optional[int]   = 0
     last_activity: datetime
     created_at:    Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+# ─── USB Phone Camera Schemas ─────────────────────────────────────────────────
+
+class USBDeviceItem(BaseModel):
+    serial: str
+    state: str
+    model: str
+    product: Optional[str] = ""
+    usb_info: Optional[str] = ""
+    authorized: bool = True
+
+class USBHardwareItem(BaseModel):
+    name: str
+    instance_id: Optional[str] = ""
+    status: Optional[str] = "OK"
+
+class USBDetectResponse(BaseModel):
+    adb_available: bool
+    adb_path: Optional[str] = None
+    devices: List[USBDeviceItem] = []
+    pnp_hardware_detected: List[USBHardwareItem] = []
+    instructions: List[str] = []
+
+class USBTestRequest(BaseModel):
+    phone_port: Optional[int] = 8080
+    local_port: Optional[int] = 8090
+    stream_path: Optional[str] = "/video"
+    device_serial: Optional[str] = None
+    auto_find_port: Optional[bool] = True
+
+class USBTestResponse(BaseModel):
+    success: bool
+    message: str
+    local_port: Optional[int] = 8090
+    phone_port: Optional[int] = 8080
+    resolution: Optional[str] = None
+    stream_url: Optional[str] = None
+    adb_forwarded: bool = False
+    frames_received: bool = False
+
+class USBConnectRequest(BaseModel):
+    name: str
+    location: Optional[str] = "USB Mobile Surveillance"
+    device_serial: Optional[str] = None
+    phone_port: Optional[int] = 8080
+    local_port: Optional[int] = 8090
+    stream_path: Optional[str] = "/video"
+    app_type: Optional[str] = "IP_WEBCAM" # IP_WEBCAM | DROIDCAM | CUSTOM
+    auto_find_port: Optional[bool] = True
+
+class USBFindPortResponse(BaseModel):
+    available_port: int
+    preferred_port: int
+
+class USBStatusResponse(BaseModel):
+    connected: bool
+    device_count: int
+    active_forwards: List[dict] = []
+    adb_available: bool
 
 
 
@@ -144,6 +211,7 @@ class DetectionCreate(BaseModel):
     is_in_restricted_zone: Optional[bool]  = False
     loitering_duration:    Optional[int]   = None
     timestamp:             Optional[datetime] = None
+    session_id:            Optional[str]   = None
     # Video-relative frame identity — populated only for uploaded-video detections
     frame_index:           Optional[int]   = None
     video_time_sec:        Optional[float] = None
@@ -153,6 +221,7 @@ class DetectionResponse(BaseModel):
     id:                    str
     camera_id:             str
     video_id:              Optional[str]   = None
+    session_id:            Optional[str]   = None
     object_type:           str
     object_id:             str
     confidence:            float

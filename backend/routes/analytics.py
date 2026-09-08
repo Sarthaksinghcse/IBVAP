@@ -56,8 +56,9 @@ def get_analytics(
         or 0
     )
 
+    VEHICLE_CLASSES = ["VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE", "BICYCLE"]
     vehicle_count = (
-        det_q.filter(Detection.object_type == "VEHICLE")
+        det_q.filter(Detection.object_type.in_(VEHICLE_CLASSES))
         .with_entities(func.count(func.distinct(Detection.object_id)))
         .scalar()
         or 0
@@ -131,7 +132,8 @@ def get_transparency_metrics(
     total_alerts = alert_q.count()
 
     # Filtered animals (non-threat classes)
-    animal_detections = det_q.filter(Detection.object_type == "ANIMAL").count()
+    ANIMAL_CLASSES = ["ANIMAL", "DOG", "CAT", "BIRD", "HORSE", "SHEEP", "COW", "ELEPHANT", "BEAR", "ZEBRA", "GIRAFFE"]
+    animal_detections = det_q.filter(Detection.object_type.in_(ANIMAL_CLASSES)).count()
 
     # Low confidence detections (< 50.0%)
     low_conf_detections = det_q.filter(Detection.confidence < 50.0).count()

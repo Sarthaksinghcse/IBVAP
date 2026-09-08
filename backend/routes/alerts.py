@@ -27,10 +27,18 @@ def get_alerts(
     db: Session = Depends(get_db),
 ):
     q = db.query(Alert)
-    if status:       q = q.filter(Alert.status       == status)
-    if threat_level: q = q.filter(Alert.threat_level == threat_level)
     if camera_id:    q = q.filter(Alert.camera_id    == camera_id)
     if video_id:     q = q.filter(Alert.video_id     == video_id)
+    if not camera_id and not video_id:
+        from models.models import Camera
+        valid_cam_ids = [c.id for c in db.query(Camera).all()]
+        if valid_cam_ids:
+            q = q.filter(Alert.camera_id.in_(valid_cam_ids), Alert.video_id.is_(None))
+        else:
+            return []
+
+    if status:       q = q.filter(Alert.status       == status)
+    if threat_level: q = q.filter(Alert.threat_level == threat_level)
     items = q.order_by(Alert.created_at.desc()).limit(limit).all()
     return [_to_alert_response(a) for a in items]
 
