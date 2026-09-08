@@ -1,0 +1,69 @@
+# IBVAP Behaviour Analysis Module Configuration
+# ===============================================
+
+enabled: true
+debounce_cooldown_seconds: 20.0
+global_rate_cap_per_min: 10
+
+# Night-time monitoring window (24h format)
+night_hours:
+  start_hour: 19
+  end_hour: 6
+
+# Layer 1 Behaviour Primitives Configuration
+primitives:
+  zone_intrusion:
+    enabled: true
+    min_frames: 3
+    severity: "HIGH"
+
+  loitering:
+    enabled: true
+    loiter_seconds: 15.0
+    max_displacement_pct: 15.0   # Net displacement max threshold (% of frame width)
+    severity: "MEDIUM"
+
+  direction_violation:
+    enabled: true
+    min_frames: 5
+    angular_threshold_deg: 120.0 # Angular deviation threshold (degrees)
+    severity: "HIGH"
+
+  speed_anomaly:
+    enabled: true
+    run_threshold_h_per_s: 1.5   # Scale-invariant speed: bbox heights per second
+    sprint_delta_h_per_s: 0.8    # Acceleration spike threshold (heights/s^2)
+    severity: "MEDIUM"
+
+  group_formation:
+    enabled: true
+    group_n: 4                   # Min cluster size
+    group_radius_pct: 15.0       # Proximity radius (% of frame)
+    group_seconds: 3.0           # Sustained duration
+    severity: "HIGH"
+
+  night_presence:
+    enabled: true
+    min_frames: 5
+    severity: "HIGH"
+
+# Layer 2 Unsupervised Anomaly Scoring Configuration
+anomaly:
+  enabled: true
+  grid_rows: 8
+  grid_cols: 8
+  score_threshold: 3.0           # Mahalanobis distance threshold
+  learning_rate: 0.01            # Online EMA update rate for normalcy model
+
+# Camera-specific default profiles and zone geometry overrides
+cameras:
+  default:
+    expected_flow_deg: 0.0
+    zones:
+      - name: "Restricted Zone A"
+        type: "restricted"
+        polygon:
+          - [5.0, 5.0]
+          - [50.0, 5.0]
+          - [50.0, 98.0]
+          - [5.0, 98.0]

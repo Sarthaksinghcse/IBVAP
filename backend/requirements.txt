@@ -6,3 +6,14 @@ python-multipart==0.0.9
 aiofiles==23.2.1
 requests==2.32.3
 websockets==12.0
+
+# ── AI engine dependencies ────────────────────────────────────────────────────
+# The backend imports ai_engine directly (routes/videos.py, routes/cameras.py),
+# so these are backend runtime requirements, not optional extras. shapely in
+# particular was missing here while being imported by the video analysis worker.
+numpy==2.2.6
+opencv-python==5.0.0.93
+shapely==2.1.2
+ultralytics==8.4.143
+torch==2.14.0
+torchvision==0.29.0
