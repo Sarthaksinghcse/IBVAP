@@ -11,6 +11,7 @@ import { useAlerts } from '../hooks/useAlerts';
 import { useAnalytics } from '../hooks/useAnalytics';
 import { formatEventTime } from '../utils/time';
 import bgImage from '../assets/bg.png';
+import logoImg from '../assets/logo.png';
 
 export default function Dashboard() {
   useCameras();
@@ -125,12 +126,19 @@ export default function Dashboard() {
 
       {/* ── 1. HOME HEADER (SEAMLESS MOUNTAIN, FLAG & WATCHTOWER LANDSCAPE) ──── */}
       <div className="relative flex items-end justify-between min-h-[145px] md:min-h-[165px] pb-1 overflow-visible select-none">
-        {/* Left Title & Status */}
+        {/* Left Title & Status with Official Shield Emblem */}
         <div className="relative z-10 pb-2">
-          <h1 className="text-3xl font-extrabold text-white light:text-slate-900 font-sans tracking-tight leading-none">
-            Home
-          </h1>
-          <div className="flex items-center gap-2 mt-2">
+          <div className="flex items-center gap-3">
+            <img
+              src={logoImg}
+              alt="SHIELD Emblem"
+              className="w-9 h-9 object-contain drop-shadow-md flex-shrink-0"
+            />
+            <h1 className="text-3xl font-extrabold text-white light:text-slate-900 font-sans tracking-tight leading-none">
+              Home
+            </h1>
+          </div>
+          <div className="flex items-center gap-2 mt-2 ml-0.5">
             <span className="text-xs font-medium text-[#9aa2b5] light:text-slate-600">
               Sector {sectorDisplayName}
             </span>
@@ -142,15 +150,15 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right: Mountain + Indian Flag + Watchtower Artwork */}
-        <div className="absolute right-0 bottom-0 h-[150px] md:h-[170px] w-full max-w-[780px] flex items-end justify-end pointer-events-none overflow-hidden">
+        {/* Right: Mountain + Indian Flag + Watchtower Artwork (User BG Image) */}
+        <div className="absolute right-0 bottom-0 h-[155px] md:h-[175px] w-full max-w-[820px] flex items-end justify-end pointer-events-none overflow-hidden rounded-r-2xl">
           <img
-            src="/shield_bg_artwork.png"
+            src={bgImage}
             alt="SHIELD Indian Border Visual"
-            className="h-full w-auto object-contain object-bottom object-right drop-shadow-sm"
+            className="h-full w-auto object-cover object-bottom drop-shadow-lg opacity-90 rounded-r-2xl"
           />
           {/* Soft gradient fade towards left background */}
-          <div className="absolute inset-0 bg-gradient-to-r from-[var(--bg-page)] via-[var(--bg-page)]/20 to-transparent pointer-events-none w-48" />
+          <div className="absolute inset-0 bg-gradient-to-r from-[#08090c] via-[#08090c]/50 to-transparent pointer-events-none w-72" />
         </div>
       </div>
 

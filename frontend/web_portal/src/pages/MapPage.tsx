@@ -1,6 +1,7 @@
 import { MapPin, Shield, Video } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useState } from 'react';
+import bgImage from '../assets/bg.png';
 
 export default function MapPage() {
   const cameras = useStore((s) => s.cameras);
@@ -52,7 +53,7 @@ export default function MapPage() {
 
         {/* Mountain contour background */}
         <img
-          src="/shield_bg_artwork.png"
+          src={bgImage}
           alt="Terrain Map"
           className="absolute inset-0 w-full h-full object-cover opacity-20 filter contrast-125 pointer-events-none"
         />

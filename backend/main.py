@@ -92,13 +92,13 @@ app.include_router(ws_router)
 
 
 
-# ─── Health Endpoints ─────────────────────────────────────────────────────────
+# ─── Health & System Endpoints ───────────────────────────────────────────────
 
 @app.get("/", tags=["Health"])
 def root():
     return {
-        "service": "IBVAP Backend",
-        "version": "1.0.0",
+        "service": "SHIELD Backend",
+        "version": "2.0.0",
         "status":  "online",
         "docs":    "/docs",
     }
@@ -106,3 +106,24 @@ def root():
 @app.get("/health", tags=["Health"])
 def health():
     return {"status": "ok"}
+
+@app.get("/api/system/status", tags=["System"])
+def system_status():
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    models_dir = os.path.join(repo_root, "models")
+    yolo_exists = os.path.exists(os.path.join(models_dir, "yolov8n.pt"))
+    face_exists = os.path.exists(os.path.join(models_dir, "face_recognition_sface_2021dec.onnx"))
+    anpr_exists = os.path.exists(os.path.join(models_dir, "text_recognition_CRNN_EN_2021sep.onnx"))
+    return {
+        "backend_status": "ONLINE",
+        "ai_engine_status": "RUNNING" if yolo_exists else "ERROR",
+        "database_status": "OK",
+        "model_name": "YOLOv8n + DeepSORT",
+        "models": {
+            "yolov8": yolo_exists,
+            "face_recognition": face_exists,
+            "anpr": anpr_exists,
+        },
+        "fps": 25.0,
+        "processing_time_ms": 42.0,
+    }

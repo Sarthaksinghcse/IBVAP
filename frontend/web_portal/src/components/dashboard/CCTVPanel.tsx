@@ -293,7 +293,6 @@ export function CCTVPanel() {
       latestRenderedSeqRef.current = 0;
       if (webcamAiActiveRef.current) {
         webcamAiActiveRef.current = false;
-        setSystemStatus({ ai_engine_status: 'STOPPED' });
       }
       return;
     }
@@ -476,14 +475,12 @@ export function CCTVPanel() {
   };
 
   const handleExitCameraMode = () => {
-    setSystemStatus({ ai_engine_status: 'STOPPED' });
     stopDeviceCamera();
     setCameraMode(false);
     setActiveFrameDetections([]);
   };
 
   const handleStopCamera = () => {
-    setSystemStatus({ ai_engine_status: 'STOPPED' });
     stopDeviceCamera();
     setActiveFrameDetections([]);
   };

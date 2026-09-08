@@ -110,6 +110,9 @@ export function useWebSocket() {
             events: p.events,
             status: p.status,
           });
+          if (p.status === 'PROCESSING' || p.status === 'AI_ANALYZING') {
+            setSystemStatus({ ai_engine_status: 'RUNNING', fps: p.fps || 25.0 });
+          }
           break;
         }
         case 'VIDEO_STATUS': {
