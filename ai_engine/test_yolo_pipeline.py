@@ -58,11 +58,11 @@ def main():
     time.sleep(1.0)
 
     # 2. Initialize Real YOLOv8 Pipeline Components
-    model_file = r"E:\IBVAP\models\yolov8n.pt"
-    video_file = r"E:\IBVAP\storage\videos\test_border.mp4"
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    video_file = os.path.join(base_dir, "storage", "videos", "test_border.mp4")
 
-    print(f"Loading YOLO Model from: {model_file}")
-    detector = Detector(model_path=model_file, conf_threshold=0.35)
+    detector = Detector(conf_threshold=0.35)
+    print(f"Loading YOLO Model from: {detector.model_path}")
     tracker = Tracker()
     threat_engine = ThreatEngine(
         camera_id="BOP-07",

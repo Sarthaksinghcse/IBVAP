@@ -128,10 +128,21 @@ def root():
 def health():
     return {"status": "ok"}
 
+def _find_models_dir() -> str:
+    candidates = [
+        os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")),
+        os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "models")),
+        os.path.normpath(os.path.join(os.getcwd(), "models")),
+        os.path.normpath(r"C:\Users\thaku\OneDrive\Desktop\IBVAP\models"),
+    ]
+    for c in candidates:
+        if os.path.exists(c) and os.path.isdir(c):
+            return c
+    return candidates[0]
+
 @app.get("/api/system/status", tags=["System"])
 def system_status():
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    models_dir = os.path.join(repo_root, "models")
+    models_dir = _find_models_dir()
     yolo_exists = os.path.exists(os.path.join(models_dir, "yolov8n.pt"))
     face_exists = os.path.exists(os.path.join(models_dir, "face_recognition_sface_2021dec.onnx"))
     anpr_exists = os.path.exists(os.path.join(models_dir, "text_recognition_CRNN_EN_2021sep.onnx"))

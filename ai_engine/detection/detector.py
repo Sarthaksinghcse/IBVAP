@@ -60,28 +60,43 @@ class Detector:
     Loads yolov8n.pt and executes frame inference with ByteTrack integration.
     """
 
-    def __init__(self, model_path: str = "E:/IBVAP/models/yolov8n.pt", conf_threshold: float = 0.45):
-        # Resolve path relative to IBVAP if needed
-        if not os.path.isabs(model_path):
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            self.model_path = os.path.normpath(os.path.join(base_dir, "models", "yolov8n.pt"))
-        else:
-            self.model_path = model_path
-
+    def __init__(self, model_path: Optional[str] = None, conf_threshold: float = 0.45):
+        # Dynamically discover model file across workspace and runtime environments
+        self.model_path = self._resolve_model_path(model_path)
         self.conf_threshold = conf_threshold
         self.model = None
         self.load_model()
+
+    @staticmethod
+    def _resolve_model_path(candidate_path: Optional[str]) -> str:
+        if candidate_path and os.path.exists(candidate_path):
+            return candidate_path
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidates = [
+            os.path.normpath(os.path.join(base_dir, "models", "yolov8n.pt")),
+            os.path.normpath(os.path.join(base_dir, "..", "models", "yolov8n.pt")),
+            os.path.normpath(os.path.join(os.getcwd(), "models", "yolov8n.pt")),
+            os.path.normpath(os.path.join(os.getcwd(), "yolov8n.pt")),
+            os.path.normpath(r"C:\Users\thaku\OneDrive\Desktop\IBVAP\models\yolov8n.pt"),
+            os.path.normpath(r"C:\Users\thaku\OneDrive\Desktop\IBVAP\yolov8n.pt"),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+
+        return candidate_path or candidates[0]
 
     def load_model(self):
         """Load pretrained Ultralytics YOLO model."""
         try:
             from ultralytics import YOLO
-            if not os.path.exists(self.model_path):
-                logger.warning(f"[Detector] Model file not found at {self.model_path}. Loading yolov8n directly...")
-                self.model = YOLO("yolov8n.pt")
-            else:
+            if os.path.exists(self.model_path):
                 logger.info(f"[Detector] Loading YOLO model from {self.model_path}...")
                 self.model = YOLO(self.model_path)
+            else:
+                logger.warning(f"[Detector] Model file not found at {self.model_path}. Loading yolov8n directly...")
+                self.model = YOLO("yolov8n.pt")
             logger.info("[Detector] YOLOv8n model loaded successfully.")
         except Exception as e:
             logger.error(f"[Detector] Failed to load YOLO model: {e}")

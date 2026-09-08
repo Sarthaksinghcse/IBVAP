@@ -12,6 +12,7 @@
   "author": "SHIELD Team",
   "license": "UNLICENSED",
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "electron-is-dev": "^2.0.0"
   },
   "devDependencies": {
@@ -30,6 +31,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "intrusion-reporter.js",
       "splash.html",
       "icon.ico",
       "node_modules/**/*"
@@ -38,29 +40,50 @@
       {
         "from": "../web_portal/dist",
         "to": "app",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../../backend",
         "to": "backend",
-        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+        "filter": [
+          "**/*",
+          "!__pycache__/**",
+          "!*.pyc"
+        ]
       },
       {
         "from": "../../ai_engine",
         "to": "ai_engine",
-        "filter": ["**/*", "!__pycache__/**", "!*.pyc"]
+        "filter": [
+          "**/*",
+          "!__pycache__/**",
+          "!*.pyc"
+        ]
       },
       {
         "from": "../../storage",
         "to": "storage",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../models",
+        "to": "models",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icon.ico"

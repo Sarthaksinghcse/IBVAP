@@ -13,17 +13,21 @@ import cv2
 import numpy as np
 
 # Set project roots
-sys.path.insert(0, "E:/IBVAP")
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REPO_ROOT)
 
 from ai_engine.detection.detector import Detector
 from ai_engine.tracking.tracker import Tracker
 from ai_engine.intelligence.anpr_engine import get_anpr_engine
 
 
-def test_plate_detection_on_video(video_path: str = "E:/IBVAP/storage/videos/test_border.mp4"):
+def test_plate_detection_on_video(video_path: Optional[str] = None):
     print("=" * 75)
     print("      IBVAP: TESTING NUMBER PLATE (ANPR) DETECTION ON VIDEO")
     print("=" * 75)
+
+    if video_path is None:
+        video_path = os.path.join(REPO_ROOT, "storage", "videos", "test_border.mp4")
 
     if not os.path.exists(video_path):
         print(f"[ERROR] Video file not found: {video_path}")
@@ -31,7 +35,7 @@ def test_plate_detection_on_video(video_path: str = "E:/IBVAP/storage/videos/tes
 
     # Initialize YOLO Detector & ANPR Engine
     print(f"\n[1] Initializing YOLOv8n Detector and CRNN ANPR Engine...")
-    detector = Detector(model_path="E:/IBVAP/models/yolov8n.pt", conf_threshold=0.35)
+    detector = Detector(conf_threshold=0.35)
     tracker = Tracker()
     anpr_engine = get_anpr_engine()
 

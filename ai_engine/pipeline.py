@@ -147,7 +147,7 @@ class IBVAPPipeline:
         video_id: Optional[str] = None,
         conf_threshold: float = 0.40,
         loitering_threshold: float = 15.0,  # 15s prototype threshold
-        model_path: str = "E:/IBVAP/models/yolov8n.pt",
+        model_path: Optional[str] = None,
         throttle_fps: Optional[float] = 30.0,
         loop_video: bool = False,
         show_video: bool = True
@@ -375,12 +375,12 @@ class IBVAPPipeline:
 def main():
     parser = argparse.ArgumentParser(description="IBVAP Real YOLOv8 AI Pipeline")
     parser.add_argument("--camera",    default="BOP-07",                      help="Border Camera ID (e.g. BOP-07)")
-    parser.add_argument("--source",    default="E:/IBVAP/storage/videos/test_border.mp4", help="Path to MP4 or RTSP stream")
+    parser.add_argument("--source",    default="0",                           help="Path to MP4 or RTSP stream, or webcam index")
     parser.add_argument("--backend",   default="http://localhost:8000",         help="FastAPI Backend URL")
     parser.add_argument("--video-id",  default=None,                          help="Optional Video ID in DB")
     parser.add_argument("--conf",      type=float, default=0.40,             help="Detection confidence threshold (0.0 - 1.0)")
     parser.add_argument("--loiter",    type=float, default=15.0,             help="Loitering threshold in seconds")
-    parser.add_argument("--model",     default="E:/IBVAP/models/yolov8n.pt",  help="Path to YOLOv8n model weights")
+    parser.add_argument("--model",     default=None,                          help="Path to YOLOv8n model weights (auto-discovered if omitted)")
     parser.add_argument("--fps",       type=float, default=30.0,             help="Frame rate processing limit (0 for unlimited)")
     parser.add_argument("--loop",      action="store_true",                   help="Loop video continuously")
     args = parser.parse_args()

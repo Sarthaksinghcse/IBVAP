@@ -77,8 +77,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Send connection confirmation and live system status
     import os
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    yolo_exists = os.path.exists(os.path.join(repo_root, "models", "yolov8n.pt"))
+    candidates = [
+        os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "models", "yolov8n.pt")),
+        os.path.normpath(os.path.join(os.getcwd(), "models", "yolov8n.pt")),
+        os.path.normpath(r"C:\Users\thaku\OneDrive\Desktop\IBVAP\models\yolov8n.pt"),
+    ]
+    yolo_exists = any(os.path.exists(c) for c in candidates)
     await manager.send_to(websocket, {
         "type": "SYSTEM",
         "data": {
@@ -87,7 +91,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "database_status": "OK",
             "fps": 25.0,
             "processing_time_ms": 42.0,
-            "model_name": "YOLOv8n + DeepSORT",
+            "model_name": "YOLOv8n + ByteTrack",
             "message": "Connected to SHIELD WebSocket",
         },
         "timestamp": __import__("datetime").datetime.utcnow().isoformat(),

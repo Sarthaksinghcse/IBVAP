@@ -186,7 +186,17 @@ class FaceEngine:
 
         if models_dir is None:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            models_dir = os.path.join(base_dir, "models")
+            candidates = [
+                os.path.normpath(os.path.join(base_dir, "models")),
+                os.path.normpath(os.path.join(base_dir, "..", "models")),
+                os.path.normpath(os.path.join(os.getcwd(), "models")),
+                os.path.normpath(r"C:\Users\thaku\OneDrive\Desktop\IBVAP\models"),
+            ]
+            models_dir = candidates[0]
+            for c in candidates:
+                if os.path.exists(c) and os.path.isdir(c):
+                    models_dir = c
+                    break
 
         self.yunet_path = os.path.normpath(os.path.join(models_dir, "face_detection_yunet_2023mar.onnx"))
         self.sface_path = os.path.normpath(os.path.join(models_dir, "face_recognition_sface_2021dec.onnx"))
