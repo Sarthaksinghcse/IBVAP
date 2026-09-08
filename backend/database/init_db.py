@@ -3,6 +3,11 @@ IBVAP Backend — Database Initialiser
 Creates all tables and applies idempotent schema migrations.
 Starts with zero predefined/fake cameras (real source-management architecture).
 """
+import sys, os
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
 from database.database import engine, Base, SessionLocal
 from models.models import Camera, Zone
 from sqlalchemy import text
@@ -58,14 +63,30 @@ def init_db():
 
     db = SessionLocal()
     try:
-        # Clean up legacy demo seeded camera entries (BOP-01 to BOP-07, WEBCAM-01)
-        legacy_demo_ids = ["BOP-01", "BOP-02", "BOP-03", "BOP-04", "BOP-05", "BOP-06", "BOP-07", "WEBCAM-01"]
+        # Clean up legacy demo seeded camera entries (BOP-01 to BOP-07)
+        legacy_demo_ids = ["BOP-01", "BOP-02", "BOP-03", "BOP-04", "BOP-05", "BOP-06", "BOP-07"]
         deleted_count = db.query(Camera).filter(Camera.id.in_(legacy_demo_ids), Camera.stream_url.is_(None)).delete(synchronize_session=False)
         if deleted_count > 0:
             logger.info(f"[DB] Purged {deleted_count} legacy demo camera templates for clean zero-startup.")
-            # Also clean orphan zones for purged demo cameras
             db.query(Zone).filter(Zone.source_id.in_(legacy_demo_ids)).delete(synchronize_session=False)
             db.commit()
+
+        # Ensure a default restricted perimeter zone exists for WEBCAM-01
+        webcam_zone = db.query(Zone).filter(Zone.source_id == "WEBCAM-01").first()
+        if not webcam_zone:
+            import json, uuid
+            w_zone = Zone(
+                id=str(uuid.uuid4()),
+                source_id="WEBCAM-01",
+                source_type="WEBCAM",
+                name="Restricted Zone A",
+                coordinates_json=json.dumps([[30, 15], [92, 15], [92, 90], [30, 90]]),
+                enabled=True,
+                zone_type="RESTRICTED"
+            )
+            db.add(w_zone)
+            db.commit()
+            logger.info("[DB] Initialized default Restricted Zone A for WEBCAM-01")
 
         count = db.query(Camera).count()
         logger.info(f"[DB] Database ready. Active registered cameras: {count}")
@@ -74,6 +95,14 @@ def init_db():
         db.rollback()
     finally:
         db.close()
+
+
+if __name__ == "__main__":
+    import os, sys
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+    init_db()
 
 
 

@@ -8,6 +8,7 @@ from websocket.manager import manager
 from datetime import datetime, timedelta
 import uuid, os, shutil, threading, logging, sys, time, json
 import cv2
+from shapely.geometry import Point, box
 
 logger = logging.getLogger("video_route")
 
@@ -205,8 +206,25 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
 
             # 3. Save detection records with video timeline
             for track in active_tracks:
-                bx, by = track.bottom_center
-                is_in_zone = threat_engine.zone_polygon.contains(Point(bx, by)) if threat_engine.zone_polygon is not None else False
+                # Multi-factor zone check: track.in_zone, point probe (feet, center, chest), or box intersection
+                is_in_zone = bool(track.in_zone)
+                if not is_in_zone and threat_engine.zone_polygon is not None:
+                    try:
+                        bx, by = track.bottom_center
+                        cx, cy = track.center
+                        b = track.bbox
+                        if (
+                            threat_engine.zone_polygon.contains(Point(bx, by))
+                            or threat_engine.zone_polygon.contains(Point(cx, cy))
+                            or threat_engine.zone_polygon.contains(Point(cx, b["y"] + b["h"] * 0.35))
+                        ):
+                            is_in_zone = True
+                        else:
+                            track_box = box(b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"])
+                            if threat_engine.zone_polygon.intersects(track_box):
+                                is_in_zone = True
+                    except Exception as ze:
+                        logger.debug(f"[VideoInference] Zone test error: {ze}")
 
                 event_type = "PERSON_DETECTED"
                 face_match_data = None

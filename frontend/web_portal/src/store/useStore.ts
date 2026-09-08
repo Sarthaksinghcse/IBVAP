@@ -49,6 +49,23 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 
 
+const DEFAULT_ZONES: Record<string, Zone> = {
+  'WEBCAM-01': {
+    id: 'zone-default-webcam-01',
+    source_id: 'WEBCAM-01',
+    source_type: 'WEBCAM',
+    name: 'Restricted Zone A',
+    coordinates: [
+      [30, 15],
+      [92, 15],
+      [92, 90],
+      [30, 90],
+    ],
+    enabled: true,
+    zone_type: 'RESTRICTED',
+  },
+};
+
 const loadSettingsFromStorage = (): AppSettings => {
   try {
     const raw = localStorage.getItem('shield_settings');
@@ -200,7 +217,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
   alerts: [],
   detections: [],
   cameras: [],
-  zones: {},
+  zones: { ...DEFAULT_ZONES },
   watchlist: [],
   activeTracksBySource: {},
   analytics: null,
@@ -338,7 +355,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
 
   // --- Zone Actions ---
   setZones: (zoneList) => {
-    const zoneMap: Record<string, Zone> = {};
+    const zoneMap: Record<string, Zone> = { ...DEFAULT_ZONES };
     for (const z of zoneList) {
       zoneMap[z.source_id] = z;
     }
@@ -368,7 +385,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
   fetchZones: async () => {
     try {
       const data = await api.getZones();
-      const zoneMap: Record<string, Zone> = {};
+      const zoneMap: Record<string, Zone> = { ...DEFAULT_ZONES };
       for (const z of data) {
         zoneMap[z.source_id] = z;
       }

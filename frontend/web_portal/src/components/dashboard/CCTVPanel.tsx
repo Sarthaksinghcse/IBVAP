@@ -26,6 +26,87 @@ function isPointInPolygon(point: [number, number], vs: [number, number][]): bool
 }
 
 /**
+ * Check if two line segments (p1, p2) and (p3, p4) intersect.
+ */
+function doSegmentsIntersect(
+  p1: [number, number],
+  p2: [number, number],
+  p3: [number, number],
+  p4: [number, number]
+): boolean {
+  const ccw = (a: [number, number], b: [number, number], c: [number, number]) =>
+    (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0]);
+
+  return (
+    ccw(p1, p3, p4) !== ccw(p2, p3, p4) &&
+    ccw(p1, p2, p3) !== ccw(p1, p2, p4)
+  );
+}
+
+/**
+ * Robust spatial overlap test between a bounding box and a polygon.
+ * Evaluates:
+ * 1. Multiple key human probe points (centroid, chest, head, feet, 4 corners, 4 edge centers).
+ * 2. Any polygon vertex residing inside the bounding box.
+ * 3. Line segment intersection between any box edge and any polygon edge.
+ */
+function doesBoxOverlapPolygon(bbox: { x: number; y: number; w: number; h: number }, poly: [number, number][]): boolean {
+  if (!poly || poly.length < 3) return false;
+
+  const bx1 = bbox.x;
+  const by1 = bbox.y;
+  const bx2 = bbox.x + bbox.w;
+  const by2 = bbox.y + bbox.h;
+  const cx = bbox.x + bbox.w / 2;
+  const cy = bbox.y + bbox.h / 2;
+
+  // 1. Check probe points of the detection inside the polygon
+  const probePoints: [number, number][] = [
+    [cx, cy],                           // Center
+    [cx, by2],                          // Feet / bottom-center
+    [cx, by1 + bbox.h * 0.3],           // Chest / torso
+    [cx, by1 + bbox.h * 0.15],          // Head
+    [bx1, by1],                         // Top-Left
+    [bx2, by1],                         // Top-Right
+    [bx1, by2],                         // Bottom-Left
+    [bx2, by2],                         // Bottom-Right
+    [bx1, cy],                          // Mid-Left
+    [bx2, cy],                          // Mid-Right
+  ];
+
+  for (const pt of probePoints) {
+    if (isPointInPolygon(pt, poly)) return true;
+  }
+
+  // 2. Check if any polygon vertex is contained inside the bounding box
+  for (const [px, py] of poly) {
+    if (px >= bx1 && px <= bx2 && py >= by1 && py <= by2) {
+      return true;
+    }
+  }
+
+  // 3. Check if any box edge intersects any polygon edge
+  const boxEdges: [[number, number], [number, number]][] = [
+    [[bx1, by1], [bx2, by1]],
+    [[bx2, by1], [bx2, by2]],
+    [[bx2, by2], [bx1, by2]],
+    [[bx1, by2], [bx1, by1]],
+  ];
+
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const polyEdgeStart = poly[j];
+    const polyEdgeEnd = poly[i];
+    for (const [boxStart, boxEnd] of boxEdges) {
+      if (doSegmentsIntersect(boxStart, boxEnd, polyEdgeStart, polyEdgeEnd)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Determine if a detected object is a person located inside the restricted perimeter zone.
  */
 function isPersonInRestrictedZone(det: Detection, zone?: Zone | null): boolean {
@@ -34,11 +115,10 @@ function isPersonInRestrictedZone(det: Detection, zone?: Zone | null): boolean {
   if (det.is_in_restricted_zone || det.event_type === 'ZONE_INTRUSION') {
     return true;
   }
-  // If active polygon coordinates exist, check bottom-center of bounding box (feet position on ground)
-  if (zone && zone.enabled && zone.coordinates && zone.coordinates.length >= 3) {
-    const feetX = det.bbox.x + det.bbox.w / 2;
-    const feetY = det.bbox.y + det.bbox.h;
-    return isPointInPolygon([feetX, feetY], zone.coordinates);
+  // If active polygon coordinates exist (supports both coordinates & polygon aliases)
+  const coords = zone?.coordinates || (zone as unknown as { polygon?: [number, number][] })?.polygon;
+  if (zone && zone.enabled !== false && coords && coords.length >= 3) {
+    return doesBoxOverlapPolygon(det.bbox, coords);
   }
   return false;
 }
@@ -120,11 +200,12 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
 
 
 function RestrictedZoneOverlay({ zone }: { zone?: Zone }) {
-  if (!zone || !zone.coordinates || zone.coordinates.length < 3 || !zone.enabled) return null;
-  const pointsStr = zone.coordinates.map(([x, y]) => `${x},${y}`).join(' ');
+  const coords = zone?.coordinates || (zone as unknown as { polygon?: [number, number][] })?.polygon;
+  if (!zone || !coords || coords.length < 3 || zone.enabled === false) return null;
+  const pointsStr = coords.map(([x, y]) => `${x},${y}`).join(' ');
 
-  const minX = Math.min(...zone.coordinates.map((c) => c[0]));
-  const minY = Math.min(...zone.coordinates.map((c) => c[1]));
+  const minX = Math.min(...coords.map((c) => c[0]));
+  const minY = Math.min(...coords.map((c) => c[1]));
 
   return (
     <div className="absolute inset-0 pointer-events-none z-15">
@@ -241,9 +322,17 @@ export function CCTVPanel() {
   const activeSourceId = isCameraMode ? 'WEBCAM-01' : (activeVideoId ? activeVideoId : selectedCamId);
   const activeSourceType: 'CAMERA' | 'WEBCAM' | 'VIDEO' = isCameraMode ? 'WEBCAM' : (activeVideoId ? 'VIDEO' : 'CAMERA');
   const activeZone = zones[activeSourceId];
-  const hasZoneConfigured = Boolean(activeZone && activeZone.coordinates && activeZone.coordinates.length >= 3 && activeZone.enabled);
+  const activeCoords = activeZone?.coordinates || (activeZone as unknown as { polygon?: [number, number][] })?.polygon;
+  const hasZoneConfigured = Boolean(activeZone && activeCoords && activeCoords.length >= 3 && activeZone.enabled !== false);
   const showRestrictedZone = settings.showRestrictedZone && hasZoneConfigured;
   const hasIntrusion = activeFrameDetections.some((d) => d.is_in_restricted_zone);
+
+  // Synchronized refs so asynchronous inference intervals & requestAnimationFrames never suffer from stale closures
+  const activeZoneRef = useRef<Zone | undefined>(activeZone);
+  activeZoneRef.current = activeZone;
+
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
 
 
@@ -353,10 +442,12 @@ export function CCTVPanel() {
 
         frameSeqRef.current += 1;
         const currentSeq = frameSeqRef.current;
-        const confThreshold = (settings.aiThreshold || 50) / 100;
-        const faceEnabled = settings.faceRecognitionEnabled ?? true;
-        const faceThreshold = (settings.faceMatchThreshold ?? 45) / 100;
-        const anprEnabled = settings.anprEnabled ?? true;
+        const currentSettings = settingsRef.current;
+        const currentZone = activeZoneRef.current;
+        const confThreshold = (currentSettings.aiThreshold || 50) / 100;
+        const faceEnabled = currentSettings.faceRecognitionEnabled ?? true;
+        const faceThreshold = (currentSettings.faceMatchThreshold ?? 45) / 100;
+        const anprEnabled = currentSettings.anprEnabled ?? true;
 
         const res = await api.inferWebcamFrame(
           base64Data,
@@ -366,8 +457,6 @@ export function CCTVPanel() {
           faceThreshold,
           anprEnabled
         );
-
-
 
         if (!isMounted) return;
 
@@ -380,24 +469,36 @@ export function CCTVPanel() {
         if (res && res.frame_seq >= latestRenderedSeqRef.current) {
           latestRenderedSeqRef.current = res.frame_seq;
           const allDets = (res.detections || []) as Detection[];
-          const threshold = settings.aiThreshold || 50;
+          const threshold = currentSettings.aiThreshold || 50;
           const filtered = allDets.filter(
             (d) => typeof d.confidence === 'number' && d.confidence >= threshold
           );
 
+          // Decorate detections in real-time with restricted zone status
+          const decorated = filtered.map((d) => {
+            const inZone = isPersonInRestrictedZone(d, currentZone);
+            return inZone
+              ? {
+                  ...d,
+                  is_in_restricted_zone: true,
+                  event_type: d.event_type === 'WATCHLIST_MATCH' ? d.event_type : ('ZONE_INTRUSION' as const),
+                }
+              : d;
+          });
+
           // Update bounding boxes (local state only — no Zustand array replacement)
-          setActiveFrameDetections(filtered);
-          setActiveTracksForSource('WEBCAM-01', filtered);
+          setActiveFrameDetections(decorated);
+          setActiveTracksForSource('WEBCAM-01', decorated);
 
           // Acoustic Beep when a PERSON enters or is detected inside the restricted zone
-          const hasPersonInZone = filtered.some((d) => isPersonInRestrictedZone(d, activeZone));
-          if (hasPersonInZone && (settings.personBeep ?? true)) {
+          const hasPersonInZone = decorated.some((d) => isPersonInRestrictedZone(d, currentZone));
+          if (hasPersonInZone && (currentSettings.personBeep ?? true)) {
             playRestrictedZonePersonBeep();
           }
 
           // Push significant events into store using addDetection (append, not replace)
           const now = Date.now() / 1000;
-          for (const det of filtered) {
+          for (const det of decorated) {
             const key = det.object_id || det.camera_id;
             const prevTime = lastLoggedTime.get(key);
 
@@ -445,11 +546,23 @@ export function CCTVPanel() {
     }
 
     if (isCctvLive) {
+      const currentZone = activeZoneRef.current;
+      const currentSettings = settingsRef.current;
       const liveDets = detections.filter((d) => d.camera_id === selectedCamId && !d.video_id).slice(0, 5);
-      setActiveFrameDetections(liveDets);
-      if (selectedCamId) setActiveTracksForSource(selectedCamId, liveDets);
-      const hasPersonInZone = liveDets.some((d) => isPersonInRestrictedZone(d, activeZone));
-      if (hasPersonInZone && (settings.personBeep ?? true)) {
+      const decorated = liveDets.map((d) => {
+        const inZone = isPersonInRestrictedZone(d, currentZone);
+        return inZone
+          ? {
+              ...d,
+              is_in_restricted_zone: true,
+              event_type: d.event_type === 'WATCHLIST_MATCH' ? d.event_type : ('ZONE_INTRUSION' as const),
+            }
+          : d;
+      });
+      setActiveFrameDetections(decorated);
+      if (selectedCamId) setActiveTracksForSource(selectedCamId, decorated);
+      const hasPersonInZone = decorated.some((d) => isPersonInRestrictedZone(d, currentZone));
+      if (hasPersonInZone && (currentSettings.personBeep ?? true)) {
         playRestrictedZonePersonBeep();
       }
       return;
@@ -479,17 +592,29 @@ export function CCTVPanel() {
               uniqueMap.set(det.object_id, det);
             }
           }
+          const currentZone = activeZoneRef.current;
+          const currentSettings = settingsRef.current;
           const filtered = Array.from(uniqueMap.values()).filter(
-            (d) => typeof d.confidence === 'number' && d.confidence >= (settings.aiThreshold || 50)
+            (d) => typeof d.confidence === 'number' && d.confidence >= (currentSettings.aiThreshold || 50)
           );
-          setActiveFrameDetections(filtered);
+          const decorated = filtered.map((d) => {
+            const inZone = isPersonInRestrictedZone(d, currentZone);
+            return inZone
+              ? {
+                  ...d,
+                  is_in_restricted_zone: true,
+                  event_type: d.event_type === 'WATCHLIST_MATCH' ? d.event_type : ('ZONE_INTRUSION' as const),
+                }
+              : d;
+          });
+          setActiveFrameDetections(decorated);
           if (activeVideoId) {
-            setActiveTracksForSource(activeVideoId, filtered);
+            setActiveTracksForSource(activeVideoId, decorated);
           }
 
           // Acoustic Beep when a PERSON enters or is detected inside the restricted zone
-          const hasPersonInZone = filtered.some((d) => isPersonInRestrictedZone(d, activeZone));
-          if (hasPersonInZone && (settings.personBeep ?? true)) {
+          const hasPersonInZone = decorated.some((d) => isPersonInRestrictedZone(d, currentZone));
+          if (hasPersonInZone && (currentSettings.personBeep ?? true)) {
             playRestrictedZonePersonBeep();
           }
         }

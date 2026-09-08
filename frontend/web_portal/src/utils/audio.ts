@@ -36,29 +36,44 @@ export function playAlertChime() {
   }
 }
 
+// Singleton Web Audio Context to avoid browser context exhaustion (max 6 limit in Chromium)
+let sharedAudioCtx: AudioContext | null = null;
+
+function getSharedAudioContext(): AudioContext | null {
+  try {
+    const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtxClass) return null;
+    if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
+      sharedAudioCtx = new AudioCtxClass();
+    }
+    if (sharedAudioCtx.state === 'suspended') {
+      sharedAudioCtx.resume().catch(() => {});
+    }
+    return sharedAudioCtx;
+  } catch (e) {
+    console.debug('[Audio] Shared AudioContext initialization error:', e);
+    return null;
+  }
+}
+
+// Automatically unlock audio context upon user interactions
+if (typeof window !== 'undefined') {
+  const unlockAudio = () => {
+    const ctx = getSharedAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  };
+  window.addEventListener('click', unlockAudio, { capture: true, passive: true });
+  window.addEventListener('keydown', unlockAudio, { capture: true, passive: true });
+  window.addEventListener('pointerdown', unlockAudio, { capture: true, passive: true });
+}
+
 // Rate limiting for restricted zone person intrusion beeps to avoid acoustic overload
 let lastPersonZoneBeepTime = 0;
 
-/**
- * Play an urgent acoustic alarm beep when a person enters or is detected inside a restricted zone.
- * Uses a tactical dual-burst alert frequency (1174.7 Hz D6 -> 1568 Hz G6) to immediately alert
- * border security operators of unauthorized human intrusion within the monitored perimeter.
- */
-export function playRestrictedZonePersonBeep(force = false, minIntervalMs = 1200) {
-  const now = Date.now();
-  if (!force && now - lastPersonZoneBeepTime < minIntervalMs) {
-    return;
-  }
-  lastPersonZoneBeepTime = now;
-
+function doSynthesizeIntrusionBeep(ctx: AudioContext) {
   try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
-
     const t = ctx.currentTime;
 
     // Pulse 1: Urgent 1174.7 Hz (D6)
@@ -66,7 +81,7 @@ export function playRestrictedZonePersonBeep(force = false, minIntervalMs = 1200
     const gain1 = ctx.createGain();
     osc1.type = 'triangle';
     osc1.frequency.setValueAtTime(1174.7, t);
-    gain1.gain.setValueAtTime(0.35, t);
+    gain1.gain.setValueAtTime(0.40, t);
     gain1.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
     osc1.connect(gain1);
     gain1.connect(ctx.destination);
@@ -78,12 +93,40 @@ export function playRestrictedZonePersonBeep(force = false, minIntervalMs = 1200
     const gain2 = ctx.createGain();
     osc2.type = 'triangle';
     osc2.frequency.setValueAtTime(1568.0, t + 0.09);
-    gain2.gain.setValueAtTime(0.40, t + 0.09);
+    gain2.gain.setValueAtTime(0.45, t + 0.09);
     gain2.gain.exponentialRampToValueAtTime(0.001, t + 0.19);
     osc2.connect(gain2);
     gain2.connect(ctx.destination);
     osc2.start(t + 0.09);
     osc2.stop(t + 0.19);
+  } catch (err) {
+    console.debug('[Audio] doSynthesizeIntrusionBeep error:', err);
+  }
+}
+
+/**
+ * Play an urgent acoustic alarm beep when a person enters or is detected inside a restricted zone.
+ * Uses a tactical dual-burst alert frequency (1174.7 Hz D6 -> 1568 Hz G6) to immediately alert
+ * border security operators of unauthorized human intrusion within the monitored perimeter.
+ */
+export function playRestrictedZonePersonBeep(force = false, minIntervalMs = 850) {
+  const now = Date.now();
+  if (!force && now - lastPersonZoneBeepTime < minIntervalMs) {
+    return;
+  }
+  lastPersonZoneBeepTime = now;
+
+  try {
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => {
+        doSynthesizeIntrusionBeep(ctx);
+      }).catch(() => {});
+    } else {
+      doSynthesizeIntrusionBeep(ctx);
+    }
   } catch (e) {
     console.debug('[Audio] Restricted zone person beep error:', e);
   }

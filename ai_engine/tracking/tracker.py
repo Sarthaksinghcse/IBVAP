@@ -41,6 +41,17 @@ class TrackedObject:
             return time.time() - self.zone_entry_time
         return 0.0
 
+    def update_zone_status(self, in_zone: bool, zone_name: Optional[str] = None):
+        """Update whether this object is inside a restricted zone and track entry time."""
+        if in_zone and not self.in_zone:
+            if self.zone_entry_time is None:
+                self.zone_entry_time = time.time()
+        elif not in_zone:
+            self.zone_entry_time = None
+        self.in_zone = in_zone
+        if zone_name is not None:
+            self.zone_name = zone_name
+
     @property
     def bottom_center(self) -> tuple:
         """(x%, y%) bottom-center reference point for zone testing."""

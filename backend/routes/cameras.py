@@ -395,7 +395,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
         # ── Build detection response & AI Evaluation ─────────────────────────
         now = datetime.utcnow()
         output_detections = []
-        from shapely.geometry import Point
+        from shapely.geometry import Point, box
         from ai_engine.intelligence.face_engine import get_face_engine
         from ai_engine.intelligence.anpr_engine import get_anpr_engine
         from models.models import ANPREvent
@@ -404,8 +404,25 @@ async def infer_webcam_frame(data: WebcamInferRequest):
         anpr_engine = get_anpr_engine()
 
         for track in active_tracks:
-            bx, by = track.bottom_center
-            is_in_zone = threat_engine.zone_polygon.contains(Point(bx, by)) if threat_engine.zone_polygon is not None else False
+            # Multi-factor zone check: track.in_zone, point probe (feet, center, chest), or box intersection
+            is_in_zone = bool(track.in_zone)
+            if not is_in_zone and threat_engine.zone_polygon is not None:
+                try:
+                    bx, by = track.bottom_center
+                    cx, cy = track.center
+                    b = track.bbox
+                    if (
+                        threat_engine.zone_polygon.contains(Point(bx, by))
+                        or threat_engine.zone_polygon.contains(Point(cx, cy))
+                        or threat_engine.zone_polygon.contains(Point(cx, b["y"] + b["h"] * 0.35))
+                    ):
+                        is_in_zone = True
+                    else:
+                        track_box = box(b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"])
+                        if threat_engine.zone_polygon.intersects(track_box):
+                            is_in_zone = True
+                except Exception as ze:
+                    logger.debug(f"[WebcamAI] Zone test error: {ze}")
 
             # Real Face Recognition on detected PERSON objects
             face_match_info = None

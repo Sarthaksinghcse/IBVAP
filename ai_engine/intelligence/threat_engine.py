@@ -9,7 +9,7 @@ import time
 import logging
 from typing import List, Dict, Optional, Tuple
 import requests
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, box
 from ai_engine.tracking.tracker import TrackedObject
 
 logger = logging.getLogger("threat_engine")
@@ -164,14 +164,25 @@ class ThreatEngine:
         processed_detections = []
 
         for track in tracks:
-            bx, by = track.bottom_center
-            pt = Point(bx, by)
-
             # 1. Evaluate Restricted Zone Geometry (Source-Specific)
             is_in_zone = False
             if self.zone_polygon is not None:
                 try:
-                    is_in_zone = self.zone_polygon.contains(pt)
+                    bx, by = track.bottom_center
+                    cx, cy = track.center
+                    b = track.bbox
+                    # Multi-point spatial test (feet, center, chest)
+                    if (
+                        self.zone_polygon.contains(Point(bx, by))
+                        or self.zone_polygon.contains(Point(cx, cy))
+                        or self.zone_polygon.contains(Point(cx, b["y"] + b["h"] * 0.35))
+                    ):
+                        is_in_zone = True
+                    else:
+                        # Full bounding-box geometric overlap test
+                        track_box = box(b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"])
+                        if self.zone_polygon.intersects(track_box):
+                            is_in_zone = True
                 except Exception as e:
                     logger.error(f"[ThreatEngine] Zone check error: {e}")
 
