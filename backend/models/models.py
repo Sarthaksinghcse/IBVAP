@@ -70,6 +70,7 @@ class Detection(Base):
     bbox_h                = Column(Float,   default=0.0)
     is_in_restricted_zone = Column(Boolean, default=False)
     loitering_duration    = Column(Integer, nullable=True)
+    behaviour_label       = Column(String(32), nullable=True)   # e.g. "NORMAL_TRANSIT", "PACING", "CIRCLING", "RUNNING"
     timestamp             = Column(DateTime, default=datetime.utcnow, index=True)
     # ── Video-relative frame identity (populated only for uploaded-video detections) ──
     frame_index           = Column(Integer, nullable=True)   # 0-based frame counter
@@ -137,6 +138,7 @@ class Alert(Base):
     bbox_h        = Column(Float,   default=0.0)
     status        = Column(String,  default="NEW", index=True)  # NEW | ACKNOWLEDGED | UNDER_INVESTIGATION | RESOLVED
     snapshot_path = Column(String,  nullable=True)
+    behaviour_label = Column(String(32), nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -272,3 +274,32 @@ class WatchlistAuditLog(Base):
     justification = Column(Text,    nullable=True)    # Required free text on DELETE
     details       = Column(Text,    nullable=True)    # JSON with change details
     timestamp     = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+# ─── System Operators & Biometric Auth ───────────────────────────────────────
+
+class User(Base):
+    __tablename__ = "users"
+
+    id            = Column(String, primary_key=True, default=_uid)
+    name          = Column(String, nullable=False)
+    email         = Column(String, nullable=True, unique=True, index=True)
+    role          = Column(String, default="operator")       # admin | operator | viewer
+    is_active     = Column(Boolean, default=True, index=True)
+    photo_path    = Column(String, nullable=True)            # saved face photo
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+
+    embeddings    = relationship("UserFaceEmbedding", back_populates="user", cascade="all, delete-orphan")
+
+
+class UserFaceEmbedding(Base):
+    __tablename__ = "user_face_embeddings"
+
+    id             = Column(String, primary_key=True, default=_uid)
+    user_id        = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    embedding_json = Column(Text, nullable=False)   # JSON array, 128 floats
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+    user           = relationship("User", back_populates="embeddings")
+

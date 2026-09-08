@@ -3,10 +3,23 @@ import type { Alert, Detection, Camera, Video, Analytics, AlertStatus, Zone } fr
 
 // ─── Axios Client ─────────────────────────────────────────────────────────────
 
+const apiKey = import.meta.env.VITE_IBVAP_API_KEY || import.meta.env.VITE_API_KEY || 'admin-key';
+
 const client = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
   timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+  },
+});
+
+client.interceptors.request.use((config) => {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null;
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 client.interceptors.response.use(
@@ -288,6 +301,20 @@ export const testANPRPlate = (formData: FormData): Promise<TestANPRResult> =>
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
+
+// ─── Face Authentication Endpoints ───────────────────────────────────────────
+
+import type { AuthUser, AuthResponse, RegisterWebcamPayload, LoginWebcamPayload } from '../types';
+
+export const registerFaceWebcam = (data: RegisterWebcamPayload): Promise<AuthResponse> =>
+  client.post<AuthResponse>('/api/auth/register-webcam', data).then((r) => r.data);
+
+export const loginFaceWebcam = (data: LoginWebcamPayload): Promise<AuthResponse> =>
+  client.post<AuthResponse>('/api/auth/login-webcam', data).then((r) => r.data);
+
+export const getMe = (): Promise<AuthUser> =>
+  client.get<AuthUser>('/api/auth/me').then((r) => r.data);
+
 
 
 

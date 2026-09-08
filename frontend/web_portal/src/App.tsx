@@ -1,6 +1,9 @@
 import { useEffect } from 'react';
-import { BrowserRouter, HashRouter, Routes, Route, useNavigate } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
+import FaceLogin from './pages/FaceLogin';
+import FaceRegister from './pages/FaceRegister';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './store/useStore';
 import Dashboard     from './pages/Dashboard';
@@ -41,6 +44,12 @@ function AppRoutes() {
   useWebSocket();
   const theme = useStore((s) => s.theme);
   const navigate = useNavigate();
+  const initAuth = useStore((s) => s.initAuth);
+
+  // Initialize Auth state from stored JWT
+  useEffect(() => {
+    initAuth();
+  }, [initAuth]);
 
   useEffect(() => {
     if (theme === 'light') {
@@ -64,9 +73,19 @@ function AppRoutes() {
   }, [navigate]);
 
   return (
-
     <Routes>
-      <Route element={<Layout />}>
+      {/* Public Face Authentication Routes */}
+      <Route path="/login" element={<FaceLogin />} />
+      <Route path="/register" element={<FaceRegister />} />
+
+      {/* Protected Surveillance Application */}
+      <Route
+        element={
+          <ProtectedRoute>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
         <Route index             element={<Dashboard />} />
         <Route path="monitoring" element={<LiveMonitoring />} />
         <Route path="alerts">
@@ -79,14 +98,13 @@ function AppRoutes() {
         <Route path="analytics" element={<Analytics />} />
         <Route path="system"    element={<SystemStatus />} />
         <Route path="settings"  element={<Settings />} />
-        {/* Fallback */}
-        <Route path="*" element={<Dashboard />} />
       </Route>
+
+      {/* Fallback */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
-
-
 
 // ─── Root App ─────────────────────────────────────────────────────────────────
 

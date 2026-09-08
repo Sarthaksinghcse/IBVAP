@@ -8,9 +8,43 @@ and dispatches events to the FastAPI backend.
 import time
 import logging
 from typing import List, Dict, Optional, Tuple
+import cv2
+import uuid
+from pathlib import Path
 import requests
 from shapely.geometry import Point, Polygon, box
+
+SNAPSHOT_DIR = Path("storage/snapshots")
+SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+def save_annotated_snapshot(frame, bbox_dict, track_id, threat_level, reason) -> Optional[str]:
+    if frame is None:
+        return None
+    try:
+        annotated = frame.copy()
+        h_f, w_f = annotated.shape[:2]
+        x1 = int((bbox_dict.get("x", 0) / 100.0) * w_f)
+        y1 = int((bbox_dict.get("y", 0) / 100.0) * h_f)
+        w_b = int((bbox_dict.get("w", 0) / 100.0) * w_f)
+        h_b = int((bbox_dict.get("h", 0) / 100.0) * h_f)
+        x2, y2 = x1 + w_b, y1 + h_b
+        
+        color = (0, 0, 255) if threat_level == "CRITICAL" else (0, 140, 255)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+        cv2.putText(annotated, f"{threat_level} | ID:{track_id}", 
+                    (x1, max(0, y1-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        cv2.putText(annotated, reason[:60], 
+                    (10, annotated.shape[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                    
+        filename = f"{threat_level}_{track_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
+        path = SNAPSHOT_DIR / filename
+        cv2.imwrite(str(path), annotated)
+        return f"storage/snapshots/{filename}"
+    except Exception as e:
+        logger.error(f"[ThreatEngine] Error saving snapshot: {e}")
+        return None
 from ai_engine.tracking.tracker import TrackedObject
+from ai_engine.intelligence.behaviour_engine import BehaviourEngine, BehaviourLabel
 
 logger = logging.getLogger("threat_engine")
 
@@ -47,8 +81,10 @@ class ThreatEngine:
         self.alert_cooldown_seconds = alert_cooldown_seconds
         self.min_confidence = min_confidence
         self.alert_callback = alert_callback
-
-
+        # Per-camera instance to prevent cross-camera track ID collision
+        self.behaviour_engine = BehaviourEngine()
+        # Grace period: track IDs missing for fewer frames than this are kept
+        self._trajectory_miss_counts: Dict[int, int] = {}
 
         # Configure Source-Specific Restricted Zone Polygon
         self.set_zone(restricted_zone_polygon, zone_name)
@@ -91,19 +127,23 @@ class ThreatEngine:
         track: TrackedObject,
         is_in_zone: bool,
         is_loitering: bool,
-        video_id: Optional[str]
+        video_id: Optional[str],
+        behaviour_label: Optional[BehaviourLabel] = None,
+        behaviour_weight: float = 0.0
     ) -> Tuple[str, str, str, dict]:
         """
         SIH Differentiator 1: Threat-Correlation Engine
-        Combines zone-breach, loitering duration, detection confidence, time of day,
-        and persistence into a single explainable threat assessment (NONE/LOW/MEDIUM/HIGH/CRITICAL)
-        with stated evidence.
+        Combines zone-breach, loitering duration, detection confidence, trajectory behavior,
+        time of day, and persistence into a single explainable threat assessment
+        (NONE/LOW/MEDIUM/HIGH/CRITICAL) with stated evidence.
         """
         from datetime import datetime
         source_label = f"VIDEO {video_id}" if video_id else self.camera_id
         current_hour = datetime.now().hour
         is_night = (current_hour >= 22 or current_hour < 6)
         time_desc = "nighttime surveillance (high sensitivity)" if is_night else "daytime monitoring"
+
+        b_label_str = behaviour_label.value if hasattr(behaviour_label, "value") else (str(behaviour_label) if behaviour_label else "NORMAL_TRANSIT")
 
         evidence = {
             "in_zone": is_in_zone,
@@ -112,6 +152,8 @@ class ThreatEngine:
             "confidence": round(track.confidence, 1),
             "is_night": is_night,
             "frames_tracked": track.frame_count,
+            "behaviour_label": b_label_str,
+            "behaviour_weight": behaviour_weight,
         }
 
         # SIH Differentiator 2: False-Positive Filtering (Animals & Low Confidence)
@@ -123,24 +165,45 @@ class ThreatEngine:
 
         # Person Threat Correlation
         if track.object_type == "PERSON":
+            level = "LOW"
+            event_type = "PERSON_DETECTED"
+            reason_parts = [f"{track.object_label} detected at {source_label}."]
+
             if is_loitering and self.zone_name:
-                reason = (
+                event_type = "LOITERING"
+                level = "CRITICAL"
+                reason_parts = [
                     f"{track.object_label} breached {self.zone_name} at {source_label}, "
                     f"loitered for {int(track.zone_dwell_time)}s (limit: {int(self.loitering_threshold)}s), "
                     f"and maintained {track.confidence:.1f}% confidence during {time_desc}."
-                )
-                return "LOITERING", "CRITICAL", reason, evidence
-
+                ]
             elif is_in_zone and self.zone_name:
+                event_type = "ZONE_INTRUSION"
                 level = "CRITICAL" if is_night else "HIGH"
-                reason = (
+                reason_parts = [
                     f"{track.object_label} entered {self.zone_name} at {source_label} "
                     f"with {track.confidence:.1f}% confidence during {time_desc}."
-                )
-                return "ZONE_INTRUSION", level, reason, evidence
+                ]
 
-            else:
-                return "PERSON_DETECTED", "LOW", f"{track.object_label} detected at {source_label}.", evidence
+            # Incorporate Trajectory Behaviour Analysis
+            if behaviour_label == BehaviourLabel.RUNNING:
+                reason_parts.append("Running detected (velocity-based, instant escalation).")
+                if level in ["NONE", "LOW", "MEDIUM"]:
+                    level = "HIGH"
+            elif behaviour_label == BehaviourLabel.CIRCLING:
+                reason_parts.append("Circular/surveillance movement pattern detected.")
+                if level in ["NONE", "LOW", "MEDIUM"]:
+                    level = "HIGH"
+            elif behaviour_label == BehaviourLabel.PACING:
+                reason_parts.append("Pacing behaviour (back-and-forth) detected.")
+                if level in ["NONE", "LOW"]:
+                    level = "MEDIUM"
+            elif behaviour_label == BehaviourLabel.ERRATIC_MOVEMENT:
+                reason_parts.append("Erratic movement pattern detected.")
+                if level in ["NONE", "LOW"]:
+                    level = "MEDIUM"
+
+            return event_type, level, " ".join(reason_parts), evidence
 
         # Vehicle Threat Correlation
         elif track.object_type == "VEHICLE":
@@ -163,7 +226,30 @@ class ThreatEngine:
         current_time = time.time()
         processed_detections = []
 
+        # Clean up stale/lost tracks in trajectory store (with grace period)
+        # Allow up to 5 missed frames before purging, matching Tracker's occlusion tolerance
+        TRAJECTORY_MISS_GRACE = 5
+        active_ids = {t.track_id for t in tracks}
+        for stored_id in list(self.behaviour_engine._trajectories.keys()):
+            if stored_id not in active_ids:
+                self._trajectory_miss_counts[stored_id] = self._trajectory_miss_counts.get(stored_id, 0) + 1
+                if self._trajectory_miss_counts[stored_id] >= TRAJECTORY_MISS_GRACE:
+                    self.behaviour_engine.remove(stored_id)
+                    self._trajectory_miss_counts.pop(stored_id, None)
+            else:
+                self._trajectory_miss_counts.pop(stored_id, None)
+
         for track in tracks:
+            bx, by = track.bottom_center
+            pt = Point(bx, by)
+
+            # Update Trajectory Store & Behavior Engine
+            cx = float(track.bbox.get("x", 0.0) + track.bbox.get("w", 0.0) / 2.0)
+            cy = float(track.bbox.get("y", 0.0) + track.bbox.get("h", 0.0) / 2.0)
+            self.behaviour_engine.update(track.track_id, cx, cy, current_time)
+            behaviour_label, behaviour_weight = self.behaviour_engine.classify(track.track_id)
+            b_label_str = behaviour_label.value if hasattr(behaviour_label, "value") else str(behaviour_label)
+
             # 1. Evaluate Restricted Zone Geometry (Source-Specific)
             is_in_zone = False
             if self.zone_polygon is not None:
@@ -187,7 +273,7 @@ class ThreatEngine:
                     logger.error(f"[ThreatEngine] Zone check error: {e}")
 
             # 2. Update Spatial State on Track Object
-            track.update_zone_status(is_in_zone)
+            track.update_zone_status(is_in_zone, self.zone_name)
             zone_dwell = track.zone_dwell_time
             is_loitering = (zone_dwell >= self.loitering_threshold)
 
@@ -212,7 +298,9 @@ class ThreatEngine:
                 track=track,
                 is_in_zone=is_in_zone,
                 is_loitering=is_loitering,
-                video_id=video_id
+                video_id=video_id,
+                behaviour_label=behaviour_label,
+                behaviour_weight=behaviour_weight
             )
 
             # If plate is detected, reflect in event_type if not higher-priority zone intrusion
@@ -235,6 +323,7 @@ class ThreatEngine:
                 "is_in_restricted_zone": is_in_zone,
                 "loitering_duration": int(zone_dwell) if is_in_zone else None,
                 "plate_info": plate_info,
+                "behaviour_label": b_label_str,
             }
 
             # 5. POST Detection Event to FastAPI (Detection != Alert)
@@ -253,6 +342,10 @@ class ThreatEngine:
 
 
                 if should_alert:
+                    snapshot_path = None
+                    if frame_bgr is not None:
+                        snapshot_path = save_annotated_snapshot(frame_bgr, track.bbox, track.track_id, threat_level, reason)
+
                     alert_payload = {
                         "camera_id": self.camera_id,
                         "video_id": video_id,
@@ -263,6 +356,8 @@ class ThreatEngine:
                         "reason": reason,
                         "confidence": round(track.confidence, 1),
                         "bbox": track.bbox,
+                        "behaviour_label": b_label_str,
+                        "snapshot_path": snapshot_path,
                     }
                     if self.alert_callback:
                         try:
@@ -317,7 +412,8 @@ class ThreatEngine:
         track_id: Optional[int],
         bbox: dict,
         is_in_zone: bool = False,
-        video_id: Optional[str] = None
+        video_id: Optional[str] = None,
+        frame_bgr: Optional[object] = None
     ) -> bool:
         """
         Processes a confirmed real Watchlist Match from the FaceEngine.
@@ -370,6 +466,10 @@ class ThreatEngine:
                 f"with {similarity:.1f}% face match confidence."
             )
 
+        snapshot_path = None
+        if frame_bgr is not None:
+            snapshot_path = save_annotated_snapshot(frame_bgr, bbox, track_id, threat_level, reason)
+
         alert_payload = {
             "camera_id": self.camera_id,
             "video_id": video_id,
@@ -380,6 +480,7 @@ class ThreatEngine:
             "reason": reason,
             "confidence": similarity,
             "bbox": bbox,
+            "snapshot_path": snapshot_path,
         }
 
         if self.alert_callback:

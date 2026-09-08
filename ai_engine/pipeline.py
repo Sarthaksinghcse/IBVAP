@@ -283,7 +283,8 @@ class IBVAPPipeline:
                                 cosine_score=result["cosine_score"],
                                 track_id=track.track_id,
                                 bbox=track.bbox,
-                                is_in_zone=track.in_zone
+                                is_in_zone=track.in_zone,
+                                frame_bgr=frame
                             )
                     
                     face_ms = (time.time() - face_start) * 1000
@@ -305,12 +306,12 @@ class IBVAPPipeline:
                     logger.info(
                         f"[Frame {frame_idx:04d}/{total_frames or 'Live'}] "
                         f"FPS: {curr_fps:.1f} | Detections: [{summary_str}] | "
-                        f"Active Tracks: {len(active_tracks)} | Zone A: {zone_count} | Face ms: {face_ms:.1f}"
+                        f"Active Tracks: {len(active_tracks)}/{len(self.tracker.tracks)} | Zone A: {zone_count} | Face ms: {face_ms:.1f}"
                     )
 
                 # Visual Display
                 if self.show_video:
-                    # Draw basic tracking boxes for visual feedback
+                    # Draw tracking boxes with behaviour labels for visual feedback
                     display_frame = frame.copy()
                     for track in active_tracks:
                         h_f, w_f = display_frame.shape[:2]
@@ -318,9 +319,27 @@ class IBVAPPipeline:
                         y1 = int((track.bbox["y"] / 100.0) * h_f)
                         w_b = int((track.bbox["w"] / 100.0) * w_f)
                         h_b = int((track.bbox["h"] / 100.0) * h_f)
-                        cv2.rectangle(display_frame, (x1, y1), (x1 + w_b, y1 + h_b), (0, 255, 0), 2)
-                        cv2.putText(display_frame, f"{track.object_label}", (x1, max(0, y1 - 10)), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                        # Get behaviour label for this track from the threat engine's behaviour engine
+                        b_label, _ = self.threat_engine.behaviour_engine.classify(track.track_id)
+                        b_str = b_label.value if hasattr(b_label, "value") else str(b_label)
+
+                        # Color code: green=normal, yellow=attention, red=high threat
+                        if b_str in ("RUNNING", "CIRCLING"):
+                            box_color = (0, 0, 255)       # Red
+                        elif b_str in ("PACING", "ERRATIC_MOVEMENT", "STATIONARY"):
+                            box_color = (0, 200, 255)     # Yellow/Orange
+                        else:
+                            box_color = (0, 255, 0)       # Green
+
+                        cv2.rectangle(display_frame, (x1, y1), (x1 + w_b, y1 + h_b), box_color, 2)
+
+                        # Show label with behaviour tag
+                        display_label = f"{track.object_label}"
+                        if b_str != "NORMAL_TRANSIT":
+                            display_label += f" [{b_str}]"
+                        cv2.putText(display_frame, display_label, (x1, max(0, y1 - 10)), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_color, 2)
                         
                     cv2.imshow("IBVAP Live Camera Feed", display_frame)
                     if cv2.waitKey(1) & 0xFF == ord('q'):

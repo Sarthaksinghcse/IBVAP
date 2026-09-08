@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bell, CheckCheck, Menu,
-  Sun, Moon, Globe, Check, MoreVertical, X
+  Sun, Moon, Globe, Check, MoreVertical, X, LogOut, Shield
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { formatHeaderClock, formatRelativeTime } from '../../utils/time';
@@ -35,12 +35,15 @@ export function TopBar() {
   const setTimeFormat    = useStore((s) => s.setTimeFormat);
   const theme            = useStore((s) => s.theme);
   const setTheme         = useStore((s) => s.setTheme);
+  const currentUser      = useStore((s) => s.currentUser);
+  const logout           = useStore((s) => s.logout);
 
   // Local UI State
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen]   = useState(false);
   const [now, setNow]                 = useState(() => new Date());
   const [tzSearch, setTzSearch]       = useState('');
+  const [imgError, setImgError]       = useState(false);
 
   const notifRef = useRef<HTMLDivElement>(null);
   const menuRef  = useRef<HTMLDivElement>(null);
@@ -74,6 +77,17 @@ export function TopBar() {
   const filteredTimezones = SUPPORTED_TIMEZONES.filter((t) =>
     t.label.toLowerCase().includes(tzSearch.toLowerCase()) || t.value.toLowerCase().includes(tzSearch.toLowerCase())
   );
+
+  const displayName = currentUser?.name || currentUser?.full_name || 'Security Operator';
+  const displayRole = currentUser?.role || 'operator';
+  const photoUrl = currentUser?.photo_url || (currentUser?.id ? `/api/auth/users/${currentUser.id}/photo` : null);
+  const initials = displayName
+    .split(' ')
+    .filter(Boolean)
+    .map((n: string) => n[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase() || 'SO';
 
   return (
     <header className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-[#08090c] light:bg-white border-b border-[#272b37] light:border-[#d9dde3] relative z-40 select-none transition-colors duration-200">
@@ -230,20 +244,44 @@ export function TopBar() {
         </div>
 
         {/* Operator Profile Pill */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#121419] light:bg-[#f8fafc] border border-[#272b37] light:border-[#d9dde3] shadow-xs">
-          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-slate-700 to-slate-600 light:from-slate-300 light:to-slate-400 border border-slate-500/40 flex items-center justify-center text-[10px] font-bold text-white light:text-slate-800 flex-shrink-0 shadow-inner">
-            SO
+        <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-[#121419] light:bg-[#f8fafc] border border-[#272b37] light:border-[#d9dde3] shadow-xs">
+          <div className="w-7 h-7 rounded-full overflow-hidden bg-gradient-to-tr from-emerald-600 to-teal-500 border border-emerald-500/40 flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 shadow-inner">
+            {photoUrl && !imgError ? (
+              <img
+                src={photoUrl}
+                alt={displayName}
+                className="w-full h-full object-cover"
+                onError={() => setImgError(true)}
+              />
+            ) : (
+              <span>{initials}</span>
+            )}
           </div>
           <div className="hidden sm:block text-left">
-            <div className="text-xs font-semibold text-white light:text-slate-900 leading-tight">
-              Security Operator
+            <div className="text-xs font-semibold text-white light:text-slate-900 leading-tight truncate max-w-[130px]">
+              {displayName}
             </div>
-            <div className="flex items-center gap-1 mt-0.5">
+            <div className="flex items-center gap-1.5 mt-0.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" />
-              <span className="text-[9px] font-mono text-emerald-400 light:text-emerald-700 font-bold">Online</span>
+              <span className="text-[9px] font-mono uppercase tracking-wider text-emerald-400 light:text-emerald-700 font-bold">
+                {displayRole}
+              </span>
             </div>
           </div>
         </div>
+
+        {/* Quick Logout Button */}
+        <button
+          type="button"
+          onClick={() => {
+            logout();
+            navigate('/login');
+          }}
+          className="p-2 rounded-xl bg-[#121419] light:bg-[#f8fafc] border border-[#272b37] light:border-[#d9dde3] text-[#9aa2b5] light:text-slate-700 hover:text-red-400 light:hover:text-red-600 hover:border-red-500/30 transition-all cursor-pointer"
+          title="Sign out / Switch Operator"
+        >
+          <LogOut size={14} />
+        </button>
 
         {/* ── 3-Dot Preferences Menu ─────────────────────────────────── */}
         <div className="relative" ref={menuRef}>
@@ -307,6 +345,22 @@ export function TopBar() {
               <div className="pt-2 border-t border-[#272b37] light:border-[#d3d8e3] flex items-center justify-between text-[10px] font-mono text-[#9aa2b5] light:text-slate-500">
                 <span>Current Time:</span>
                 <span className="text-white light:text-slate-900 font-bold">{timeStr} ({dateStr})</span>
+              </div>
+
+              {/* Sign Out Option */}
+              <div className="pt-2 border-t border-[#272b37] light:border-[#d3d8e3]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    logout();
+                    navigate('/login');
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  <LogOut size={13} />
+                  <span>Sign Out Operator</span>
+                </button>
               </div>
             </div>
           )}

@@ -121,7 +121,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         from ai_engine.intelligence.face_engine import get_face_engine
         from ai_engine.intelligence.anpr_engine import get_anpr_engine
         from models.models import ANPREvent, WatchlistPlate
-        from ai_engine.intelligence.face_config import MATCH_THRESHOLD_STRICT
+        from ai_engine.intelligence.face_config import MATCH_THRESHOLD_STRICT, FACE_EVAL_INTERVAL_FRAMES, MIN_FACE_PX
 
         face_engine = get_face_engine()
         anpr_engine = get_anpr_engine()
@@ -130,12 +130,64 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         # Load active vehicle plate watchlist records
         active_plates = db.query(WatchlistPlate).filter(WatchlistPlate.is_active == True).all()
         watchlist_plate_map = {p.plate_number.replace(" ", "").upper(): p for p in active_plates}
+
+        last_worker_alert = None
+
+        def worker_alert_callback(payload: dict):
+            nonlocal last_worker_alert, events_count
+            a_id = str(uuid.uuid4())
+            alt_code = f"ALERT-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+            bbox_raw = payload.get("bbox", {})
+            bbox_json = json.dumps(bbox_raw) if isinstance(bbox_raw, dict) else str(bbox_raw)
+            ev_type = payload.get("event_type", "WATCHLIST_MATCH")
+
+            new_alert = Alert(
+                id=a_id,
+                alert_id=alt_code,
+                camera_id=payload.get("camera_id") or camera_id,
+                video_id=payload.get("video_id") or video_id,
+                event_type=ev_type,
+                object_type=payload.get("object_type", "PERSON"),
+                object_id=payload.get("object_id"),
+                threat_level=payload.get("threat_level", "HIGH"),
+                reason=payload.get("reason"),
+                confidence=float(payload.get("confidence", 0.0)),
+                confidence_kind="FACE_MATCH" if ev_type == "WATCHLIST_MATCH" else "MODEL_INFERENCE",
+                bbox=bbox_json,
+                status="NEW",
+                created_at=datetime.utcnow()
+            )
+            db.add(new_alert)
+            db.flush()
+            events_count += 1
+            last_worker_alert = new_alert
+
+            try:
+                manager.broadcast_sync({
+                    "type": "NEW_ALERT",
+                    "data": {
+                        "id": new_alert.id,
+                        "alert_id": new_alert.alert_id,
+                        "camera_id": new_alert.camera_id,
+                        "video_id": new_alert.video_id,
+                        "event_type": new_alert.event_type,
+                        "threat_level": new_alert.threat_level,
+                        "reason": new_alert.reason,
+                        "confidence": new_alert.confidence,
+                        "created_at": new_alert.created_at.isoformat() if new_alert.created_at else None
+                    }
+                })
+            except Exception as e:
+                logger.warning(f"[VideoAI] WS broadcast error: {e}")
+            return new_alert
+
         threat_engine = ThreatEngine(
             camera_id=camera_id,
             backend_url="http://localhost:8000",
             loitering_threshold=15.0,
             restricted_zone_polygon=v_coords,
-            zone_name=v_zone_name
+            zone_name=v_zone_name,
+            alert_callback=worker_alert_callback
         )
 
         cap = cv2.VideoCapture(file_path)
@@ -169,9 +221,12 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         frame_idx = 0
         wall_start = datetime.utcnow()
         alerted_tracks = set()
+        track_consensus_states: Dict[int, str] = {}
         total_detections_count = 0
         events_count = 0
         last_ws_broadcast = time.time()
+        track_consensus_states = {}
+        track_unknown_logged = set()
 
         while True:
             # Check for cancellation
@@ -201,6 +256,10 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
             # Ground-truth video-relative timeline timestamp (T+XX.Xs)
             video_time_sec = current_frame_idx / source_fps
             frame_timestamp = wall_start + timedelta(seconds=video_time_sec)
+
+            # Stage 2 P4: Compute frame luma once per sampled frame
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame_luma = float(np.mean(gray_frame))
 
             # 1. Run real YOLOv8 inference
             dets = detector.detect(frame, camera_id=camera_id, track=True)
@@ -233,64 +292,80 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                 event_type = "PERSON_DETECTED"
                 face_match_data = None
                 
-                # Phase 2.3: Early out on small tracks logic happens inside evaluate_person_track_face 
-                # (handled by MIN_FACE_PX checks) but we could also skip it here.
-                
                 if track.object_type == "PERSON" and watchlist_records:
-                    # Phase 1.1: Pass job_id and now explicitly to fix cache collision and TTL issues
-                    face_eval = face_engine.evaluate_person_track_face(
-                        frame_bgr=frame,
-                        person_bbox=track.bbox,
-                        camera_id=camera_id,
-                        track_id=track.track_id,
-                        watchlist_records=watchlist_records,
-                        threshold=MATCH_THRESHOLD_STRICT,
-                        job_id=video_id,
-                        now=video_time_sec
-                    )
+                    person_h_px = int((track.bbox["h"] / 100.0) * height)
+                    # Stage 2 P1: Pre-YuNet early-out on bbox pixel height
+                    if person_h_px >= (MIN_FACE_PX * 2):
+                        # Stage 2 P1: Gate face evaluation by frame interval
+                        is_eval_interval = (current_frame_idx % (sample_step * FACE_EVAL_INTERVAL_FRAMES) == 0)
+                        if is_eval_interval or (track.track_id not in track_consensus_states):
+                            face_eval = face_engine.evaluate_person_track_face(
+                                frame_bgr=frame,
+                                person_bbox=track.bbox,
+                                camera_id=camera_id,
+                                track_id=track.track_id,
+                                watchlist_records=watchlist_records,
+                                threshold=MATCH_THRESHOLD_STRICT,
+                                job_id=video_id,
+                                now=video_time_sec,
+                                frame_luma=frame_luma
+                            )
+                        else:
+                            # Use fast cache lookup on non-interval frames
+                            cache_key = f"{video_id}:{camera_id}:{track.track_id}"
+                            cached_entry = face_engine.track_face_cache.get(cache_key)
+                            if cached_entry:
+                                face_eval = face_engine._accumulator.push(cache_key, cached_entry["result"])
+                            else:
+                                face_eval = None
+                    else:
+                        face_eval = None
                     
-                    if face_eval.get("face_detected"):
-                        event_id = str(uuid.uuid4())
-                        
-                        # Phase 4.2: Snapshot Evidence (only if it's a confirmed match or candidate)
-                        snapshot_rel_path = None
-                        face_snapshot_rel_path = None
-                        
+                    if face_eval and face_eval.get("face_detected"):
                         is_match = face_eval.get("is_match", False)
                         consensus_state = face_eval.get("consensus_state")
-                        
-                        # Phase 1.3: Create FaceRecognitionEvent for every face detection
-                        if is_match or consensus_state == "CANDIDATE" or face_eval.get("person_name") == "UNKNOWN":
-                            # Save face crop
-                            x1 = max(0, int((track.bbox["x"] / 100.0) * width))
-                            y1 = max(0, int((track.bbox["y"] / 100.0) * height))
-                            pw = max(10, int((track.bbox["w"] / 100.0) * width))
-                            ph = max(10, int((track.bbox["h"] / 100.0) * height))
-                            face_crop = frame[y1:min(height, y1+ph), x1:min(width, x1+pw)]
-                            if face_crop.size > 0:
-                                face_snapshot_rel_path = f"/storage/snapshots/faces/{event_id}.jpg"
-                                face_snapshot_abs = os.path.join(STORAGE_ROOT, "snapshots", "faces", f"{event_id}.jpg")
-                                cv2.imwrite(face_snapshot_abs, face_crop)
+                        if not consensus_state:
+                            consensus_state = "UNKNOWN" if face_eval.get("person_name") == "UNKNOWN" else "PENDING"
 
-                        face_event = FaceRecognitionEvent(
-                            id=event_id,
-                            person_id=face_eval.get("person_id"),
-                            person_name=face_eval.get("person_name"),
-                            camera_id=camera_id,
-                            video_id=video_id,
-                            track_id=track.track_id,
-                            similarity=face_eval.get("similarity", 0.0),
-                            cosine_score=face_eval.get("cosine_score", 0.0),
-                            event_type="WATCHLIST_MATCH" if is_match else "UNKNOWN_FACE",
-                            snapshot_path=face_snapshot_rel_path,
-                            timestamp=frame_timestamp
-                        )
-                        db.add(face_event)
-                        
+                        # Stage 2 P3: Snapshot and event row only on a consensus state transition
+                        prev_state = track_consensus_states.get(track.track_id)
+                        if prev_state != consensus_state:
+                            track_consensus_states[track.track_id] = consensus_state
+                            event_id = str(uuid.uuid4())
+                            face_snapshot_rel_path = None
+
+                            if is_match or consensus_state in ["CANDIDATE", "UNKNOWN"]:
+                                # Stage 4 S3: Save face crops to storage/face_crops/ (outside public snapshots mount)
+                                face_crops_dir = os.path.join(STORAGE_ROOT, "face_crops")
+                                os.makedirs(face_crops_dir, exist_ok=True)
+                                x1 = max(0, int((track.bbox["x"] / 100.0) * width))
+                                y1 = max(0, int((track.bbox["y"] / 100.0) * height))
+                                pw = max(10, int((track.bbox["w"] / 100.0) * width))
+                                ph = max(10, int((track.bbox["h"] / 100.0) * height))
+                                face_crop = frame[y1:min(height, y1+ph), x1:min(width, x1+pw)]
+                                if face_crop.size > 0:
+                                    face_snapshot_rel_path = f"/api/watchlist/face-crops/{event_id}.jpg"
+                                    face_snapshot_abs = os.path.join(face_crops_dir, f"{event_id}.jpg")
+                                    cv2.imwrite(face_snapshot_abs, face_crop)
+
+                            face_event = FaceRecognitionEvent(
+                                id=event_id,
+                                person_id=face_eval.get("person_id"),
+                                person_name=face_eval.get("person_name"),
+                                camera_id=camera_id,
+                                video_id=video_id,
+                                track_id=track.track_id,
+                                similarity=face_eval.get("similarity", 0.0),
+                                cosine_score=face_eval.get("cosine_score", 0.0),
+                                event_type="WATCHLIST_MATCH" if is_match else "UNKNOWN_FACE",
+                                snapshot_path=face_snapshot_rel_path,
+                                timestamp=frame_timestamp
+                            )
+                            db.add(face_event)
+
                         if is_match and consensus_state == "CONFIRMED":
                             face_match_data = face_eval
                             
-                            # Phase 4.3 (C4): Delete inline alert logic and use ThreatEngine
                             alerted = threat_engine.trigger_watchlist_alert(
                                 person_id=face_eval["person_id"],
                                 person_name=face_eval["person_name"],
@@ -304,27 +379,21 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                                 video_id=video_id
                             )
                             
-                            if alerted:
+                            if alerted and last_worker_alert:
                                 events_count += 1
-                                # We need to attach snapshot to the generated Alert
-                                # In the real pipeline, trigger_watchlist_alert just creates an Alert DB record via post_alert
-                                # We can query the most recent one we just made
-                                recent_alert = db.query(Alert).filter(Alert.video_id == video_id, Alert.event_type == "WATCHLIST_MATCH").order_by(Alert.created_at.desc()).first()
-                                if recent_alert:
-                                    # Save full frame snapshot
-                                    alert_snap_rel = f"/storage/snapshots/{recent_alert.alert_id}.jpg"
-                                    alert_snap_abs = os.path.join(STORAGE_ROOT, "snapshots", f"{recent_alert.alert_id}.jpg")
-                                    # Draw bbox
-                                    annotated = frame.copy()
-                                    x1, y1 = int(track.bbox["x"]/100*width), int(track.bbox["y"]/100*height)
-                                    w, h = int(track.bbox["w"]/100*width), int(track.bbox["h"]/100*height)
-                                    cv2.rectangle(annotated, (x1, y1), (x1+w, y1+h), (0, 0, 255), 2)
-                                    cv2.putText(annotated, f"MATCH: {face_eval['person_name']}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
-                                    cv2.imwrite(alert_snap_abs, annotated)
-                                    
-                                    recent_alert.snapshot_path = alert_snap_rel
-                                    # Phase 4.5: Update confidence kind
-                                    recent_alert.confidence_kind = "FACE_MATCH"
+                                recent_alert = last_worker_alert
+                                alert_snap_rel = f"/storage/snapshots/{recent_alert.alert_id}.jpg"
+                                alert_snap_abs = os.path.join(STORAGE_ROOT, "snapshots", f"{recent_alert.alert_id}.jpg")
+                                annotated = frame.copy()
+                                x1, y1 = int(track.bbox["x"]/100*width), int(track.bbox["y"]/100*height)
+                                w, h = int(track.bbox["w"]/100*width), int(track.bbox["h"]/100*height)
+                                cv2.rectangle(annotated, (x1, y1), (x1+w, y1+h), (0, 0, 255), 2)
+                                cv2.putText(annotated, f"MATCH: {face_eval['person_name']}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+                                cv2.imwrite(alert_snap_abs, annotated)
+                                
+                                recent_alert.snapshot_path = alert_snap_rel
+                                recent_alert.confidence_kind = "FACE_MATCH"
+                                last_worker_alert = None
 
                 if is_in_zone and threat_engine.zone_name:
                     event_type = "ZONE_INTRUSION"

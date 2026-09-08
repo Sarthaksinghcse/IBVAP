@@ -57,7 +57,7 @@ class Detection:
 class Detector:
     """
     YOLOv8 Object Detector for IBVAP Surveillance.
-    Loads yolov8n.pt and executes frame inference.
+    Loads yolov8n.pt and executes frame inference with ByteTrack integration.
     """
 
     def __init__(self, model_path: str = "E:/IBVAP/models/yolov8n.pt", conf_threshold: float = 0.45):
@@ -113,7 +113,9 @@ class Detector:
                 results = self.model.track(
                     source=frame,
                     persist=True,
+                    tracker="bytetrack.yaml",    # Explicit ByteTrack (better occlusion handling)
                     conf=self.conf_threshold,
+                    iou=0.5,                      # IoU threshold for track association
                     classes=list(ALL_SUPPORTED_CLASSES),
                     verbose=False,
                     imgsz=320

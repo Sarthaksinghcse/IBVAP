@@ -132,6 +132,7 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
   const isWatchlist = Boolean(faceMatch && faceMatch.is_match);
   const isUnknownFace = Boolean(faceMatch && !faceMatch.is_match && faceMatch.person_name === 'UNKNOWN');
   const plateInfo   = det.plate_info;
+  const behaviourLabel = det.behaviour_label;
 
   const boxClass    = isWatchlist ? 'border-red-600 animate-pulse ring-2 ring-red-500' : isIntrusion ? 'bbox-intrusion' : isLoitering ? 'bbox-loitering' : isVehicle ? 'bbox-vehicle' : 'bbox-person';
   const labelBg     = isWatchlist ? 'bg-red-700' : isIntrusion ? 'bg-red-500' : isLoitering ? 'bg-orange-500' : isVehicle ? 'bg-blue-500' : 'bg-green-600';
@@ -146,6 +147,20 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
           <>
             <span className="opacity-75">•</span>
             <span>{isWatchlist && faceMatch ? `${faceMatch.similarity.toFixed(1)}% match` : `${typeof det.confidence==='number'?det.confidence.toFixed(1):det.confidence}%`}</span>
+          </>
+        )}
+        {behaviourLabel && behaviourLabel !== 'NORMAL_TRANSIT' && (
+          <>
+            {(behaviourLabel === 'RUNNING' || behaviourLabel === 'CIRCLING') ? (
+              <span className="ml-1 bg-red-600/90 text-white font-bold px-1 rounded-xs text-[8px] flex items-center gap-0.5 animate-pulse border border-red-400/50">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-200 animate-ping" />
+                🔴 {behaviourLabel}
+              </span>
+            ) : (
+              <span className="ml-1 bg-amber-500/90 text-slate-950 font-bold px-1 rounded-xs text-[8px] flex items-center gap-0.5">
+                🟡 {behaviourLabel}
+              </span>
+            )}
           </>
         )}
         {isIntrusion && <span className="ml-1 bg-red-700/90 px-1 rounded-xs">🚨 ZONE INTRUSION</span>}

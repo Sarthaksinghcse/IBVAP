@@ -171,6 +171,14 @@ export interface ANPRPlateInfo {
   vehicle_type?: string;
 }
 
+export type BehaviourLabel =
+  | 'NORMAL_TRANSIT'
+  | 'STATIONARY'
+  | 'PACING'
+  | 'ERRATIC_MOVEMENT'
+  | 'RUNNING'
+  | 'CIRCLING';
+
 export interface Detection {
   id: string;
   camera_id: string;
@@ -186,6 +194,7 @@ export interface Detection {
   loitering_duration?: number; // seconds
   face_match?: FaceMatch | null;
   plate_info?: ANPRPlateInfo | null;
+  behaviour_label?: BehaviourLabel;
   // Video-relative frame identity — set only for uploaded-video detections
   frame_index?: number;      // 0-based frame counter
   video_time_sec?: number;   // frame_index / source_fps  (ground-truth video time)
@@ -203,10 +212,11 @@ export interface Alert {
   threat_level: ThreatLevel;
   reason: string;
   confidence?: number;
-  confidence_kind?: string;
+  confidence_kind?: 'DETECTION' | 'FACE_MATCH';
   bbox?: BoundingBox;
   status: AlertStatus;
   snapshot_path?: string;
+  behaviour_label?: BehaviourLabel;
   created_at: string;
   updated_at: string;
 }
@@ -341,6 +351,36 @@ export interface TestANPRResult {
   cleaned_text?: string | null;
   message: string;
 }
+
+// ─── Face Authentication Types ───────────────────────────────────────────────
+
+export interface AuthUser {
+  user_id: string | number;
+  name: string;
+  email?: string | null;
+  role: 'admin' | 'operator' | 'viewer' | string;
+  photo_url?: string | null;
+  id?: number | string;
+  full_name?: string;
+}
+
+export interface AuthResponse extends AuthUser {
+  token: string;
+  confidence?: number | null;
+  cosine_score?: number | null;
+}
+
+export interface RegisterWebcamPayload {
+  name: string;
+  email?: string;
+  role?: string;
+  image_base64: string;
+}
+
+export interface LoginWebcamPayload {
+  image_base64: string;
+}
+
 
 
 

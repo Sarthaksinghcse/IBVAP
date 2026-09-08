@@ -8,6 +8,7 @@ import type {
   AlertStatus,
   Zone,
   WatchlistPerson,
+  AuthUser,
 } from '../types';
 import * as api from '../services/api';
 
@@ -114,6 +115,15 @@ interface IBVAPState {
   timeFormat: '12h' | '24h';
   theme: 'dark' | 'light' | 'system';
   readAlertIds: string[];
+
+  // --- Face Authentication State ---
+  currentUser: AuthUser | null;
+  token: string | null;
+  isAuthenticated: boolean;
+  isAuthChecking: boolean;
+  login: (token: string, user: AuthUser) => void;
+  logout: () => void;
+  initAuth: () => Promise<void>;
 
   // --- Settings Action ---
   updateSetting: <K extends keyof AppSettings>(key: K, val: AppSettings[K]) => void;
@@ -249,6 +259,59 @@ export const useStore = create<IBVAPState>((set, get) => ({
   uploadedVideoName: null,
   pendingVideoBlob: null,
   videoAnalysisMetrics: null,
+
+  // --- Face Authentication State & Methods ---
+  currentUser: null,
+  token: typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null,
+  isAuthenticated: false,
+  isAuthChecking: true,
+
+  login: (token: string, user: AuthUser) => {
+    localStorage.setItem('ibvap_token', token);
+    localStorage.setItem('ibvap_user', JSON.stringify(user));
+    set({ token, currentUser: user, isAuthenticated: true, isAuthChecking: false });
+  },
+
+  logout: () => {
+    localStorage.removeItem('ibvap_token');
+    localStorage.removeItem('ibvap_user');
+    set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
+  },
+
+  initAuth: async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null;
+    const cachedUser = typeof window !== 'undefined' ? localStorage.getItem('ibvap_user') : null;
+
+    if (!token) {
+      set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
+      return;
+    }
+
+    if (cachedUser) {
+      try {
+        const user = JSON.parse(cachedUser);
+        set({ token, currentUser: user, isAuthenticated: true, isAuthChecking: false });
+      } catch (e) {
+        // Cached parse failed, continue to network fetch
+      }
+    }
+
+    try {
+      const verifiedUser = await api.getMe();
+      localStorage.setItem('ibvap_user', JSON.stringify(verifiedUser));
+      set({ token, currentUser: verifiedUser, isAuthenticated: true, isAuthChecking: false });
+    } catch (err: any) {
+      console.warn('[useStore] Token verification failed:', err);
+      if (err?.response?.status === 401 || err?.response?.status === 403) {
+        localStorage.removeItem('ibvap_token');
+        localStorage.removeItem('ibvap_user');
+        set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
+      } else {
+        // Network failure; retain cached session if present
+        set({ isAuthChecking: false });
+      }
+    }
+  },
 
 
   setVideoAnalysisMetrics: (metrics) => {
