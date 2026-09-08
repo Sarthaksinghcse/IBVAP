@@ -210,7 +210,13 @@ export const deleteZone = (sourceId: string): Promise<{ status: string; message:
 
 // ─── Watchlist & Face Recognition Endpoints ───────────────────────────────────
 
-import type { WatchlistPerson, TestFaceMatchResult } from '../types';
+import type { 
+  WatchlistPerson, 
+  TestFaceMatchResult,
+  PersonPhotoGalleryResponse,
+  FaceRecognitionEventResponse,
+  WatchlistAuditLogResponse
+} from '../types';
 
 export const getWatchlist = (): Promise<WatchlistPerson[]> =>
   client.get<WatchlistPerson[]>('/api/watchlist').then((r) => r.data);
@@ -225,14 +231,24 @@ export const registerWatchlistPerson = (formData: FormData): Promise<WatchlistPe
     })
     .then((r) => r.data);
 
+export const addWatchlistPhoto = (personId: string, formData: FormData): Promise<any> =>
+  client
+    .post<any>(`/api/watchlist/${personId}/photos`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data);
+
+export const deleteWatchlistPhoto = (personId: string, embeddingId: string): Promise<any> =>
+  client.delete<any>(`/api/watchlist/${personId}/photos/${embeddingId}`).then((r) => r.data);
+
 export const updateWatchlistPerson = (
   id: string,
   data: Partial<WatchlistPerson>
 ): Promise<WatchlistPerson> =>
   client.patch<WatchlistPerson>(`/api/watchlist/${id}`, data).then((r) => r.data);
 
-export const deleteWatchlistPerson = (id: string): Promise<{ status: string; message: string }> =>
-  client.delete<{ status: string; message: string }>(`/api/watchlist/${id}`).then((r) => r.data);
+export const deleteWatchlistPerson = (id: string, justification: string = "Manual deletion"): Promise<{ status: string; message: string }> =>
+  client.delete<{ status: string; message: string }>(`/api/watchlist/${id}`, { params: { justification } }).then((r) => r.data);
 
 export const testFaceMatch = (formData: FormData): Promise<TestFaceMatchResult> =>
   client
@@ -240,6 +256,15 @@ export const testFaceMatch = (formData: FormData): Promise<TestFaceMatchResult> 
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
+
+export const getFaceEvents = (params?: { person_id?: string; camera_id?: string; event_type?: string; limit?: number }): Promise<FaceRecognitionEventResponse[]> =>
+  client.get<FaceRecognitionEventResponse[]>('/api/watchlist/events', { params }).then((r) => r.data);
+
+export const getUnknownFaceClusters = (days: number = 7, minSightings: number = 2): Promise<{ clusters: any[]; total_unknown: number }> =>
+  client.get<{ clusters: any[]; total_unknown: number }>('/api/watchlist/unknown-faces', { params: { days, min_sightings } }).then((r) => r.data);
+
+export const getAuditLog = (params?: { person_id?: string; action?: string; limit?: number }): Promise<WatchlistAuditLogResponse[]> =>
+  client.get<WatchlistAuditLogResponse[]>('/api/watchlist/audit-log', { params }).then((r) => r.data);
 
 
 // ─── ANPR Endpoints ───────────────────────────────────────────────────────────

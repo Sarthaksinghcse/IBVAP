@@ -9,12 +9,19 @@ Architecture:
 """
 import logging
 from contextlib import asynccontextmanager
+import time
+import os
+import sys
+
+# Add project root to sys.path so backend can import ai_engine
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database.init_db import init_db
+from middleware.auth import MockAuthMiddleware
 from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr
 from websocket.manager import router as ws_router
 
@@ -51,6 +58,10 @@ app = FastAPI(
     lifespan    = lifespan,
 )
 
+# ─── Middleware ───────────────────────────────────────────────────────────────
+
+app.add_middleware(MockAuthMiddleware)
+
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 
 app.add_middleware(
@@ -61,14 +72,21 @@ app.add_middleware(
     allow_headers     = ["*"],
 )
 
-# ─── Static Files (uploaded videos + snapshots + watchlist photos) ───────────
+# ─── Static Files ────────────────────────────────────────────────────────────
+# Phase 0.2 (S2): Drop watchlist/ out of the static mount.
+# Watchlist photos are served through GET /api/watchlist/{person_id}/photo
+# with a permission check. Videos served through API route as well.
+# Only snapshots stay static for now.
 
 STORAGE_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage")
 os.makedirs(os.path.join(STORAGE_ROOT, "videos"),    exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots"), exist_ok=True)
+os.makedirs(os.path.join(STORAGE_ROOT, "snapshots", "faces"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "watchlist"), exist_ok=True)
 
-app.mount("/storage", StaticFiles(directory=STORAGE_ROOT), name="storage")
+# Phase 0.2: Only mount snapshots as static — biometric photos and videos
+# are now served via authenticated API endpoints
+app.mount("/storage/snapshots", StaticFiles(directory=os.path.join(STORAGE_ROOT, "snapshots")), name="snapshots")
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
 
