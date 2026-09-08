@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from database.init_db import init_db
 from middleware.auth import MockAuthMiddleware
-from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr
+from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr, face_auth
 from websocket.manager import router as ws_router
 
 
@@ -83,10 +83,12 @@ os.makedirs(os.path.join(STORAGE_ROOT, "videos"),    exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots", "faces"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "watchlist"), exist_ok=True)
+os.makedirs(os.path.join(STORAGE_ROOT, "users"), exist_ok=True)
 
-# Mount static files: snapshots and watchlist photos
+# Static mounts for media and snapshots
 app.mount("/storage/snapshots", StaticFiles(directory=os.path.join(STORAGE_ROOT, "snapshots")), name="snapshots")
 app.mount("/storage/watchlist", StaticFiles(directory=os.path.join(STORAGE_ROOT, "watchlist")), name="watchlist")
+app.mount("/storage/users",     StaticFiles(directory=os.path.join(STORAGE_ROOT, "users")),     name="users")
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
 
@@ -98,6 +100,7 @@ app.include_router(analytics.router,  prefix="/api/analytics",  tags=["Analytics
 app.include_router(zones.router,      prefix="/api/zones",      tags=["Zones"])
 app.include_router(watchlist.router,  prefix="/api/watchlist",  tags=["Watchlist"])
 app.include_router(anpr.router,       tags=["ANPR"])
+app.include_router(face_auth.router,  prefix="/api/auth",       tags=["Face Auth"])
 app.include_router(ws_router)
 
 

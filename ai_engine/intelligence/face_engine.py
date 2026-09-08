@@ -93,7 +93,7 @@ class FaceTrackAccumulator:
         best_count = votes[best_pid]
 
         if best_count >= CONSENSUS_CONFIRM_MIN:
-            # Confirmed match — report median similarity
+            # Confirmed match — report median similarity with calibrated confidence
             sims = sorted(similarities[best_pid])
             median_sim = sims[len(sims) // 2]
             # Find the most recent result for this person to get metadata
@@ -102,6 +102,7 @@ class FaceTrackAccumulator:
                     confirmed = dict(r)
                     confirmed["cosine_score"] = round(median_sim, 4)
                     confirmed["similarity"] = round(calibrated_confidence(median_sim), 1)
+                    confirmed["calibrated_confidence"] = round(calibrated_confidence(median_sim), 1)
                     confirmed["consensus_state"] = "CONFIRMED"
                     confirmed["consensus_votes"] = best_count
                     return confirmed
@@ -117,6 +118,9 @@ class FaceTrackAccumulator:
                     candidate["similarity"] = round(calibrated_confidence(median_sim), 1)
                     candidate["consensus_state"] = "CANDIDATE"
                     candidate["consensus_votes"] = best_count
+                    cos = candidate.get("cosine_score", 0.0)
+                    candidate["similarity"] = round(calibrated_confidence(cos), 1)
+                    candidate["calibrated_confidence"] = round(calibrated_confidence(cos), 1)
                     return candidate
 
         return result
@@ -234,13 +238,17 @@ class FaceEngine:
     def is_ready(self) -> bool:
         return self.detector is not None and self.recognizer is not None
 
-    def _apply_low_light_enhancement(self, img_bgr: np.ndarray) -> np.ndarray:
+    def _apply_low_light_enhancement(self, img_bgr: np.ndarray, luma: Optional[float] = None) -> np.ndarray:
         """
         Phase 4.6: If mean frame luma is below threshold, apply CLAHE enhancement.
         Reuses the same CLAHE approach proven in anpr_engine.py.
         """
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        mean_luma = float(np.mean(gray))
+        if luma is not None:
+            mean_luma = luma
+        else:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+            mean_luma = float(np.mean(gray))
+
         if mean_luma < LOW_LIGHT_LUMA_THRESHOLD:
             clahe = cv2.createCLAHE(clipLimit=LOW_LIGHT_CLAHE_CLIP, tileGridSize=LOW_LIGHT_CLAHE_GRID)
             lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
@@ -460,6 +468,16 @@ class FaceEngine:
 
         return True, embedding, None, quality_score
 
+    def compare_faces(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
+        """Computes mathematical cosine similarity between two 128-D face embeddings."""
+        if emb1 is None or emb2 is None:
+            return 0.0
+        n1 = np.linalg.norm(emb1)
+        n2 = np.linalg.norm(emb2)
+        if n1 < 1e-7 or n2 < 1e-7:
+            return 0.0
+        return float(np.dot(emb1 / n1, emb2 / n2))
+
     def match_against_watchlist(
         self,
         query_embedding: np.ndarray,
@@ -613,8 +631,12 @@ class FaceEngine:
                 else:
                     ttl = NEG_CACHE_TTL_S
                 if elapsed < ttl:
-                    # F1: Push into consensus accumulator on every evaluation (including cache hits)
-                    cached_result = self._accumulator.push(cache_key, cached_result)
+                    # F1: Push into accumulator on cache hits so consensus confirms in ~3 frames
+                    if cached_result.get("face_detected"):
+                        raw = cached.get("raw_result", cached_result)
+                        res = self._accumulator.push(cache_key, raw)
+                        cached["result"] = res
+                        return res
                     return cached_result
 
         # Crop person region from frame
@@ -626,7 +648,14 @@ class FaceEngine:
         x2 = min(w, x1 + pw)
         y2 = min(h, y1 + ph)
 
-        # Upper body / head region focus (top 70% of person bounding box to avoid missing tilted heads)
+        # Pre-YuNet early-out on bbox pixel height
+        if ph < int(MIN_FACE_PX * 2):
+            res = {"face_detected": False, "is_match": False, "person_name": None, "similarity": 0.0, "reason": "Person bbox too small for face detection"}
+            if cache_key:
+                self.track_face_cache[cache_key] = {"result": res, "timestamp": now}
+            return res
+
+        # P4: Upper body / head region focus (widened to 70% of person bounding box, dropping full fallback)
         head_y2 = min(h, y1 + int(ph * 0.70))
         person_head_crop = frame_bgr[y1:head_y2, x1:x2]
 
@@ -634,16 +663,11 @@ class FaceEngine:
             res = {"face_detected": False, "is_match": False, "person_name": None, "similarity": 0.0}
             return res
 
-        # Phase 4.6 & P4: Low-light enhancement (rely on precalculated frame_luma if provided)
-        if frame_luma is not None:
-            if frame_luma < LOW_LIGHT_LUMA_THRESHOLD:
-                person_head_crop = self._apply_low_light_enhancement(person_head_crop)
-        else:
-            person_head_crop = self._apply_low_light_enhancement(person_head_crop)
+        # Phase 4.6 / P4: Low-light enhancement using single-computed frame luma
+        person_head_crop = self._apply_low_light_enhancement(person_head_crop, luma=frame_luma)
 
         # Single YuNet pass on the widened head crop (P4: dropped expensive full-crop fallback)
         face_info = self.detect_primary_face(person_head_crop, score_threshold=FACE_DETECT_SCORE)
-
         if face_info is None:
             res = {"face_detected": False, "is_match": False, "person_name": None, "similarity": 0.0}
             if cache_key:
@@ -678,10 +702,11 @@ class FaceEngine:
             "top_candidates": top_candidates,
         }
 
-        # Phase 4.1: Apply temporal consensus
+        # Phase 4.1 / F1: Apply temporal consensus
         if cache_key:
+            raw_eval = dict(res)
             res = self._accumulator.push(cache_key, res)
-            self.track_face_cache[cache_key] = {"result": res, "timestamp": now}
+            self.track_face_cache[cache_key] = {"result": res, "raw_result": raw_eval, "timestamp": now}
 
         return res
 

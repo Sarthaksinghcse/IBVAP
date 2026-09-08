@@ -130,34 +130,55 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         active_plates = db.query(WatchlistPlate).filter(WatchlistPlate.is_active == True).all()
         watchlist_plate_map = {p.plate_number.replace(" ", "").upper(): p for p in active_plates}
 
-        # Stage 2 P5: Pass direct DB alert callback to avoid loopback HTTP POST and race conditions
-        last_fired_alerts: Dict[str, Alert] = {}
-        def on_worker_alert(payload: dict):
-            nonlocal events_count
-            alert_id_str = str(uuid.uuid4())
+        last_worker_alert = None
+
+        def worker_alert_callback(payload: dict):
+            nonlocal last_worker_alert, events_count
+            a_id = str(uuid.uuid4())
+            alt_code = f"ALERT-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+            bbox_raw = payload.get("bbox", {})
+            bbox_json = json.dumps(bbox_raw) if isinstance(bbox_raw, dict) else str(bbox_raw)
+            ev_type = payload.get("event_type", "WATCHLIST_MATCH")
+
             new_alert = Alert(
-                id=alert_id_str,
-                alert_id=alert_id_str,
+                id=a_id,
+                alert_id=alt_code,
                 camera_id=payload.get("camera_id") or camera_id,
-                video_id=video_id,
-                event_type=payload.get("event_type", "UNKNOWN"),
+                video_id=payload.get("video_id") or video_id,
+                event_type=ev_type,
                 object_type=payload.get("object_type", "PERSON"),
-                object_id=payload.get("object_id", "Unknown"),
-                threat_level=payload.get("threat_level", "LOW"),
-                reason=payload.get("reason", ""),
-                confidence=payload.get("confidence", 0.0),
-                confidence_kind="FACE_MATCH" if payload.get("event_type") == "WATCHLIST_MATCH" else "DETECTION",
-                bbox_x=payload.get("bbox", {}).get("x", 0.0),
-                bbox_y=payload.get("bbox", {}).get("y", 0.0),
-                bbox_w=payload.get("bbox", {}).get("w", 0.0),
-                bbox_h=payload.get("bbox", {}).get("h", 0.0),
+                object_id=payload.get("object_id"),
+                threat_level=payload.get("threat_level", "HIGH"),
+                reason=payload.get("reason"),
+                confidence=float(payload.get("confidence", 0.0)),
+                confidence_kind="FACE_MATCH" if ev_type == "WATCHLIST_MATCH" else "MODEL_INFERENCE",
+                bbox=bbox_json,
                 status="NEW",
-                created_at=wall_start + timedelta(seconds=frame_idx / source_fps if source_fps > 0 else 0.0)
+                created_at=datetime.utcnow()
             )
             db.add(new_alert)
             db.flush()
             events_count += 1
-            last_fired_alerts[payload.get("event_type")] = new_alert
+            last_worker_alert = new_alert
+
+            try:
+                manager.broadcast_sync({
+                    "type": "NEW_ALERT",
+                    "data": {
+                        "id": new_alert.id,
+                        "alert_id": new_alert.alert_id,
+                        "camera_id": new_alert.camera_id,
+                        "video_id": new_alert.video_id,
+                        "event_type": new_alert.event_type,
+                        "threat_level": new_alert.threat_level,
+                        "reason": new_alert.reason,
+                        "confidence": new_alert.confidence,
+                        "created_at": new_alert.created_at.isoformat() if new_alert.created_at else None
+                    }
+                })
+            except Exception as e:
+                logger.warning(f"[VideoAI] WS broadcast error: {e}")
+            return new_alert
 
         threat_engine = ThreatEngine(
             camera_id=camera_id,
@@ -165,7 +186,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
             loitering_threshold=15.0,
             restricted_zone_polygon=v_coords,
             zone_name=v_zone_name,
-            alert_callback=on_worker_alert
+            alert_callback=worker_alert_callback
         )
 
         cap = cv2.VideoCapture(file_path)
@@ -203,6 +224,8 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         total_detections_count = 0
         events_count = 0
         last_ws_broadcast = time.time()
+        track_consensus_states = {}
+        track_unknown_logged = set()
 
         while True:
             # Check for cancellation
@@ -338,21 +361,21 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                                 video_id=video_id
                             )
                             
-                            if alerted:
-                                # Stage 2 P5: Retrieve newly created alert without race conditions
-                                recent_alert = last_fired_alerts.get("WATCHLIST_MATCH")
-                                if recent_alert:
-                                    alert_snap_rel = f"/storage/snapshots/{recent_alert.alert_id}.jpg"
-                                    alert_snap_abs = os.path.join(STORAGE_ROOT, "snapshots", f"{recent_alert.alert_id}.jpg")
-                                    annotated = frame.copy()
-                                    x1, y1 = int(track.bbox["x"]/100*width), int(track.bbox["y"]/100*height)
-                                    w, h = int(track.bbox["w"]/100*width), int(track.bbox["h"]/100*height)
-                                    cv2.rectangle(annotated, (x1, y1), (x1+w, y1+h), (0, 0, 255), 2)
-                                    cv2.putText(annotated, f"MATCH: {face_eval['person_name']}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
-                                    cv2.imwrite(alert_snap_abs, annotated)
-                                    
-                                    recent_alert.snapshot_path = alert_snap_rel
-                                    recent_alert.confidence_kind = "FACE_MATCH"
+                            if alerted and last_worker_alert:
+                                events_count += 1
+                                recent_alert = last_worker_alert
+                                alert_snap_rel = f"/storage/snapshots/{recent_alert.alert_id}.jpg"
+                                alert_snap_abs = os.path.join(STORAGE_ROOT, "snapshots", f"{recent_alert.alert_id}.jpg")
+                                annotated = frame.copy()
+                                x1, y1 = int(track.bbox["x"]/100*width), int(track.bbox["y"]/100*height)
+                                w, h = int(track.bbox["w"]/100*width), int(track.bbox["h"]/100*height)
+                                cv2.rectangle(annotated, (x1, y1), (x1+w, y1+h), (0, 0, 255), 2)
+                                cv2.putText(annotated, f"MATCH: {face_eval['person_name']}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+                                cv2.imwrite(alert_snap_abs, annotated)
+                                
+                                recent_alert.snapshot_path = alert_snap_rel
+                                recent_alert.confidence_kind = "FACE_MATCH"
+                                last_worker_alert = None
 
                 if is_in_zone and threat_engine.zone_name:
                     event_type = "ZONE_INTRUSION"

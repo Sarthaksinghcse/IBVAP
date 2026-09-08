@@ -10,8 +10,8 @@ class MockAuthMiddleware(BaseHTTPMiddleware):
     """
     Token-based auth middleware.
     Assigns role based on x-api-key header or api_key query param:
-    - ADMIN_KEY (from IBVAP_API_KEY env var, default: 'admin-key') -> admin
-    - OPERATOR_KEY -> operator
+    - IBVAP_API_KEY (default: 'admin-key') -> admin
+    - IBVAP_OPERATOR_KEY (default: 'operator-key') -> operator
     - anything else or missing -> viewer (read-only)
     """
     async def dispatch(self, request: Request, call_next):
@@ -19,13 +19,16 @@ class MockAuthMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith("/api/"):
             return await call_next(request)
 
+        admin_key = os.getenv("IBVAP_API_KEY", "admin-key")
+        operator_key = os.getenv("IBVAP_OPERATOR_KEY", "operator-key")
+
         api_key = request.headers.get("x-api-key") or request.query_params.get("api_key")
 
-        # Determine role (S5)
-        if api_key == ADMIN_KEY:
+        # Determine role
+        if api_key == admin_key:
             role = "admin"
             user = "Admin User"
-        elif api_key == OPERATOR_KEY:
+        elif api_key == operator_key:
             role = "operator"
             user = "Operator 1"
         else:
@@ -34,7 +37,7 @@ class MockAuthMiddleware(BaseHTTPMiddleware):
 
         request.state.user = {"name": user, "role": role}
 
-        # Stage 4 S1: Restrict biometric templates export to admin only
+        # S1: Restrict biometric template downloads to admin only
         if request.url.path == "/api/watchlist/embeddings" and role != "admin":
             return JSONResponse(
                 status_code=403,
@@ -43,9 +46,8 @@ class MockAuthMiddleware(BaseHTTPMiddleware):
 
         # Restrict registry writes (POST/PUT/PATCH/DELETE to /api/watchlist) to admin only
         if request.url.path.startswith("/api/watchlist") and request.method in ["POST", "PUT", "PATCH", "DELETE"]:
-            # Test-match and photo requests might be allowed by operator, but for strictness:
+            # Test-match is safe for non-admins if needed, but registry mutations require admin
             if role != "admin":
-                # Except test-match which is safe
                 if not request.url.path.endswith("/test-match"):
                     return JSONResponse(
                         status_code=403,

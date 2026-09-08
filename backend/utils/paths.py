@@ -1,6 +1,5 @@
 import os
 import uuid
-
 from fastapi import HTTPException
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
