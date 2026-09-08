@@ -35,6 +35,13 @@ STORAGE_DIR = os.path.join(
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 
+# Global version counter for watchlist caching
+_watchlist_version = 1
+
+def _increment_version():
+    global _watchlist_version
+    _watchlist_version += 1
+
 def _load_active_watchlist_records(db: Session) -> List[dict]:
     """Helper to fetch all active watchlist persons and their parsed 128-D embeddings."""
     persons = db.query(WatchlistPerson).filter(WatchlistPerson.is_active == True).all()
@@ -54,6 +61,32 @@ def _load_active_watchlist_records(db: Session) -> List[dict]:
                 logger.warning(f"[Watchlist] Error parsing embedding for person {p.id}: {e}")
     return records
 
+
+@router.get("/version")
+def get_watchlist_version():
+    return {"version": _watchlist_version}
+
+@router.get("/embeddings")
+def get_watchlist_embeddings(db: Session = Depends(get_db)):
+    records = _load_active_watchlist_records(db)
+    # Numpy arrays need to be converted to list for JSON serialization
+    serialized_records = []
+    for r in records:
+        r_copy = dict(r)
+        r_copy["embedding"] = r["embedding"].tolist()
+        serialized_records.append(r_copy)
+    return {"version": _watchlist_version, "records": serialized_records}
+
+@router.get("/events")
+def get_watchlist_events(limit: int = 100, db: Session = Depends(get_db)):
+    events = db.query(FaceRecognitionEvent).order_by(FaceRecognitionEvent.timestamp.desc()).limit(limit).all()
+    return events
+
+@router.get("/unknown-faces")
+def get_unknown_faces(days: int = 7, min_sightings: int = 2, db: Session = Depends(get_db)):
+    # Mock implementation of unknown face clustering for FaceReview.tsx
+    # A real implementation would cluster all event embeddings where event_type == 'UNKNOWN_FACE'
+    return {"clusters": [], "total_unknown": 0}
 
 @router.get("/", response_model=List[WatchlistPersonResponse])
 def list_watchlist_persons(db: Session = Depends(get_db)):
@@ -157,6 +190,7 @@ async def register_watchlist_person(
 
     # Clear face cache to ensure instant recognition on next frame
     face_engine.clear_cache()
+    _increment_version()
 
     return WatchlistPersonResponse(
         id=person.id,
@@ -214,6 +248,7 @@ def update_watchlist_person(person_id: str, data: WatchlistPersonUpdate, db: Ses
     db.refresh(person)
 
     get_face_engine().clear_cache()
+    _increment_version()
     return WatchlistPersonResponse(
         id=person.id,
         name=person.name,
@@ -249,6 +284,7 @@ def delete_watchlist_person(person_id: str, db: Session = Depends(get_db)):
     db.commit()
 
     get_face_engine().clear_cache()
+    _increment_version()
     logger.info(f"[Watchlist] Deleted person {person_id}")
     return {"status": "ok", "message": f"Person {person_id} deleted from watchlist"}
 

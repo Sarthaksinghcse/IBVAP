@@ -115,14 +115,16 @@ class Detector:
                     persist=True,
                     conf=self.conf_threshold,
                     classes=list(ALL_SUPPORTED_CLASSES),
-                    verbose=False
+                    verbose=False,
+                    imgsz=320
                 )
             else:
                 results = self.model.predict(
                     source=frame,
                     conf=self.conf_threshold,
                     classes=list(ALL_SUPPORTED_CLASSES),
-                    verbose=False
+                    verbose=False,
+                    imgsz=320
                 )
 
             if not results or len(results) == 0:
