@@ -1,7 +1,7 @@
 {
-  "name": "ibvap-desktop",
+  "name": "shield-desktop",
   "version": "1.0.0",
-  "description": "IBVAP — Intelligent Border Video Analytics Platform (Desktop)",
+  "description": "SHIELD — Intelligent Border Surveillance Platform (Desktop)",
   "main": "main.js",
   "scripts": {
     "dev": "node scripts/dev.js",
@@ -9,7 +9,7 @@
     "build": "electron-builder --win",
     "package": "electron-builder --win --dir"
   },
-  "author": "IBVAP Team",
+  "author": "SHIELD Team",
   "license": "UNLICENSED",
   "dependencies": {
     "electron-is-dev": "^2.0.0"
@@ -21,9 +21,9 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "appId": "com.ibvap.desktop",
-    "productName": "IBVAP",
-    "copyright": "Copyright © 2025 IBVAP Team",
+    "appId": "com.shield.desktop",
+    "productName": "SHIELD",
+    "copyright": "Copyright © 2026 SHIELD Defense Systems",
     "directories": {
       "output": "dist"
     },
@@ -72,7 +72,7 @@
       "uninstallerIcon": "icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "IBVAP"
+      "shortcutName": "SHIELD"
     }
   }
 }

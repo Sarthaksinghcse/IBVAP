@@ -4,6 +4,7 @@ import {
   Activity, Settings, UserCheck
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
+import logoImg from '../../assets/shield_logo.png';
 
 // ─── Nav Items Definition ─────────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ export function Sidebar() {
       {/* ── Brand Header ─────────────────────────────────────────────── */}
       <div className="px-4 py-4 flex items-center gap-3 border-b border-[#272b37] light:border-[#d9dde3]">
         <img
-          src="/shield_logo.png"
+          src={logoImg}
           alt="SHIELD Logo"
           className="w-8 h-8 object-contain drop-shadow-md flex-shrink-0"
         />

@@ -81,7 +81,7 @@ function createMainWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 680,
-    title: 'IBVAP — Intelligent Border Video Analytics Platform',
+    title: 'SHIELD — Intelligent Border Surveillance Platform',
     icon: ICON_PATH,
     show: false,
     backgroundColor: '#0a0e1a',
@@ -166,7 +166,7 @@ function createMainWindow() {
       if (tray) {
         tray.displayBalloon({
           iconType: 'info',
-          title: 'IBVAP',
+          title: 'SHIELD',
           content: 'Application minimized to system tray. Right-click to quit.',
         });
       }
@@ -196,7 +196,7 @@ function createTray() {
 
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: 'Open IBVAP',
+        label: 'Open SHIELD',
         click: () => {
           if (mainWindow) {
             mainWindow.show();
@@ -234,7 +234,7 @@ function createTray() {
       },
       { type: 'separator' },
       {
-        label: 'Quit IBVAP',
+        label: 'Quit SHIELD',
         click: () => {
           isQuitting = true;
           app.quit();
@@ -242,7 +242,7 @@ function createTray() {
       },
     ]);
 
-    tray.setToolTip('IBVAP — Intelligent Border Video Analytics Platform');
+    tray.setToolTip('SHIELD — Intelligent Border Surveillance Platform');
     tray.setContextMenu(contextMenu);
 
     tray.on('double-click', () => {
@@ -448,7 +448,7 @@ function setupIPC() {
   ipcMain.on('show-notification', (_, { title, body, urgency }) => {
     if (Notification.isSupported()) {
       const notif = new Notification({
-        title: title || 'IBVAP Alert',
+        title: title || 'SHIELD Alert',
         body: body || '',
         icon: ICON_PATH,
         urgency: urgency || 'normal', // low, normal, critical

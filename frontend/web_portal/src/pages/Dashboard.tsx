@@ -10,6 +10,7 @@ import { useCameras } from '../hooks/useCameras';
 import { useAlerts } from '../hooks/useAlerts';
 import { useAnalytics } from '../hooks/useAnalytics';
 import { formatEventTime } from '../utils/time';
+import bgImage from '../assets/bg.png';
 
 export default function Dashboard() {
   useCameras();
@@ -111,7 +112,16 @@ export default function Dashboard() {
   const sectorDisplayName = settings.sectorName || 'Drass';
 
   return (
-    <div className="space-y-4 pb-8 select-none">
+    <div
+      className="space-y-4 pb-8 select-none relative -m-4 p-4 lg:-m-6 lg:p-6 min-h-[calc(100vh-80px)] rounded-2xl transition-all duration-300"
+      style={{
+        backgroundImage: `linear-gradient(to bottom, rgba(8, 9, 12, 0.84), rgba(8, 9, 12, 0.94)), url(${bgImage})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center top',
+        backgroundAttachment: 'fixed',
+        backgroundRepeat: 'no-repeat',
+      }}
+    >
 
       {/* ── 1. HOME HEADER (SEAMLESS MOUNTAIN, FLAG & WATCHTOWER LANDSCAPE) ──── */}
       <div className="relative flex items-end justify-between min-h-[145px] md:min-h-[165px] pb-1 overflow-visible select-none">
