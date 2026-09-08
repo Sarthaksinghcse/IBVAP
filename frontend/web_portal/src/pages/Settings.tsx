@@ -285,13 +285,13 @@ export default function Settings() {
         <SettingRow label="Alert Sound (Chime)" description="Play dual-tone sound when a new CRITICAL threat alert occurs">
           <Toggle value={settings.alertSound} onChange={(v) => updateSetting('alertSound', v)} />
         </SettingRow>
-        <SettingRow label="Person Detection Beep" description="Play acoustic alert beep whenever a person is detected in video or camera feeds">
+        <SettingRow label="Restricted Zone Person Beep" description="Play acoustic alert beep whenever a person enters or is detected inside a restricted zone">
           <div className="flex items-center gap-2.5">
             <button
               type="button"
               onClick={() => playPersonDetectedBeep(true)}
               className="px-2.5 py-1 text-[11px] font-mono font-semibold rounded-lg bg-[#191c24] light:bg-slate-100 border border-[#272b37] light:border-[#d3d8e3] text-emerald-400 light:text-emerald-700 hover:bg-emerald-500/10 transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
-              title="Click to test person detection beep sound"
+              title="Click to test restricted zone person intrusion beep"
             >
               <Volume2 size={12} /> Test Beep
             </button>

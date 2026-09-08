@@ -4,7 +4,7 @@ import { wsService } from '../services/websocket';
 import { MockAIEngine } from '../services/mock/mockEngine';
 import * as api from '../services/api';
 import type { WSMessage } from '../types';
-import { playAlertChime, announceVoiceAlert, playPersonDetectedBeep } from '../utils/audio';
+import { playAlertChime, announceVoiceAlert, playRestrictedZonePersonBeep } from '../utils/audio';
 
 
 /**
@@ -65,10 +65,12 @@ export function useWebSocket() {
             }
           }
 
-          // Person detection acoustic alert
-          const isPersonAlert = alertData.object_type === 'PERSON';
-          if (isPersonAlert && (currentSettings.personBeep ?? true)) {
-            playPersonDetectedBeep();
+          // Restricted zone person intrusion acoustic alert
+          const isPersonZoneIntrusion =
+            alertData.object_type === 'PERSON' &&
+            (alertData.event_type === 'ZONE_INTRUSION' || alertData.threat_level === 'CRITICAL' || alertData.threat_level === 'HIGH');
+          if (isPersonZoneIntrusion && (currentSettings.personBeep ?? true)) {
+            playRestrictedZonePersonBeep();
           }
 
           // Auto-Acknowledge Low Alerts setting
@@ -91,9 +93,11 @@ export function useWebSocket() {
           const det = msg.data as Parameters<typeof addDetection>[0];
           addDetection(det);
           const currentSettings = useStore.getState().settings;
-          const isPerson = det.object_type === 'PERSON';
-          if (isPerson && (currentSettings.personBeep ?? true)) {
-            playPersonDetectedBeep();
+          const isPersonInZone =
+            det.object_type === 'PERSON' &&
+            (det.is_in_restricted_zone || det.event_type === 'ZONE_INTRUSION');
+          if (isPersonInZone && (currentSettings.personBeep ?? true)) {
+            playRestrictedZonePersonBeep();
           }
           break;
         }

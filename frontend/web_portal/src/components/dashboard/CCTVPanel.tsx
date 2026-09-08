@@ -7,13 +7,45 @@ import { AddCameraModal } from '../cameras/AddCameraModal';
 import { MultiCameraGrid } from './MultiCameraGrid';
 import * as api from '../../services/api';
 import type { Detection, Zone } from '../../types';
-import { playPersonDetectedBeep } from '../../utils/audio';
+import { playRestrictedZonePersonBeep } from '../../utils/audio';
 
+/**
+ * Test whether a point (x, y) in percentage [0..100] is inside a polygon.
+ */
+function isPointInPolygon(point: [number, number], vs: [number, number][]): boolean {
+  const x = point[0], y = point[1];
+  let inside = false;
+  for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+    const xi = vs[i][0], yi = vs[i][1];
+    const xj = vs[j][0], yj = vs[j][1];
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
 
+/**
+ * Determine if a detected object is a person located inside the restricted perimeter zone.
+ */
+function isPersonInRestrictedZone(det: Detection, zone?: Zone | null): boolean {
+  if (det.object_type !== 'PERSON') return false;
+  // If explicitly flagged by backend AI ThreatEngine or zone event
+  if (det.is_in_restricted_zone || det.event_type === 'ZONE_INTRUSION') {
+    return true;
+  }
+  // If active polygon coordinates exist, check bottom-center of bounding box (feet position on ground)
+  if (zone && zone.enabled && zone.coordinates && zone.coordinates.length >= 3) {
+    const feetX = det.bbox.x + det.bbox.w / 2;
+    const feetY = det.bbox.y + det.bbox.h;
+    return isPointInPolygon([feetX, feetY], zone.coordinates);
+  }
+  return false;
+}
 
 // BoundingBox
 function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfidence?: boolean }) {
-  const isIntrusion = det.is_in_restricted_zone;
+  const isIntrusion = det.is_in_restricted_zone || det.event_type === 'ZONE_INTRUSION';
   const isLoitering = det.loitering_duration && det.loitering_duration > 0;
   const isVehicle   = det.object_type === 'VEHICLE';
   const faceMatch   = det.face_match;
@@ -357,10 +389,10 @@ export function CCTVPanel() {
           setActiveFrameDetections(filtered);
           setActiveTracksForSource('WEBCAM-01', filtered);
 
-          // Acoustic Beep on person detection
-          const hasPerson = filtered.some((d) => d.object_type === 'PERSON');
-          if (hasPerson && (settings.personBeep ?? true)) {
-            playPersonDetectedBeep();
+          // Acoustic Beep when a PERSON enters or is detected inside the restricted zone
+          const hasPersonInZone = filtered.some((d) => isPersonInRestrictedZone(d, activeZone));
+          if (hasPersonInZone && (settings.personBeep ?? true)) {
+            playRestrictedZonePersonBeep();
           }
 
           // Push significant events into store using addDetection (append, not replace)
@@ -416,9 +448,9 @@ export function CCTVPanel() {
       const liveDets = detections.filter((d) => d.camera_id === selectedCamId && !d.video_id).slice(0, 5);
       setActiveFrameDetections(liveDets);
       if (selectedCamId) setActiveTracksForSource(selectedCamId, liveDets);
-      const hasPerson = liveDets.some((d) => d.object_type === 'PERSON');
-      if (hasPerson && (settings.personBeep ?? true)) {
-        playPersonDetectedBeep();
+      const hasPersonInZone = liveDets.some((d) => isPersonInRestrictedZone(d, activeZone));
+      if (hasPersonInZone && (settings.personBeep ?? true)) {
+        playRestrictedZonePersonBeep();
       }
       return;
     }
@@ -455,10 +487,10 @@ export function CCTVPanel() {
             setActiveTracksForSource(activeVideoId, filtered);
           }
 
-          // Acoustic Beep on person detection during video playback
-          const hasPerson = filtered.some((d) => d.object_type === 'PERSON');
-          if (hasPerson && (settings.personBeep ?? true)) {
-            playPersonDetectedBeep();
+          // Acoustic Beep when a PERSON enters or is detected inside the restricted zone
+          const hasPersonInZone = filtered.some((d) => isPersonInRestrictedZone(d, activeZone));
+          if (hasPersonInZone && (settings.personBeep ?? true)) {
+            playRestrictedZonePersonBeep();
           }
         }
       }
