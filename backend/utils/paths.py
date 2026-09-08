@@ -1,15 +1,22 @@
 import os
 import uuid
+from fastapi import HTTPException
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov"}
 
-def assert_within(path: str, root: str):
+def assert_within(path: str, root: str) -> str:
     """Ensure path is within root to prevent directory traversal attacks."""
     abs_root = os.path.abspath(root)
     abs_path = os.path.abspath(path)
-    if not abs_path.startswith(abs_root):
-        raise ValueError(f"Path traversal detected! Path {abs_path} is outside of {abs_root}")
+    norm_root = os.path.normcase(abs_root)
+    norm_path = os.path.normcase(abs_path)
+    try:
+        if os.path.commonpath([norm_path, norm_root]) != norm_root:
+            raise HTTPException(status_code=400, detail=f"Path traversal detected! Path {abs_path} is outside of {abs_root}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Path traversal detected! Path {abs_path} is outside of {abs_root}")
+    return abs_path
 
 def extension_from_content_type(content_type: str) -> str:
     """Returns safe file extension from content-type."""

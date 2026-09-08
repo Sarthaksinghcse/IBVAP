@@ -341,6 +341,36 @@ export interface TestANPRResult {
   message: string;
 }
 
+// ─── Face Authentication Types ───────────────────────────────────────────────
+
+export interface AuthUser {
+  user_id: string | number;
+  name: string;
+  email?: string | null;
+  role: 'admin' | 'operator' | 'viewer' | string;
+  photo_url?: string | null;
+  id?: number | string;
+  full_name?: string;
+}
+
+export interface AuthResponse extends AuthUser {
+  token: string;
+  confidence?: number | null;
+  cosine_score?: number | null;
+}
+
+export interface RegisterWebcamPayload {
+  name: string;
+  email?: string;
+  role?: string;
+  image_base64: string;
+}
+
+export interface LoginWebcamPayload {
+  image_base64: string;
+}
+
+
 
 
 

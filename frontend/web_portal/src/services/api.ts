@@ -6,7 +6,18 @@ import type { Alert, Detection, Camera, Video, Analytics, AlertStatus, Zone } fr
 const client = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
   timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    'x-api-key': import.meta.env.VITE_IBVAP_API_KEY || 'admin-key',
+  },
+});
+
+client.interceptors.request.use((config) => {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null;
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 client.interceptors.response.use(
@@ -261,7 +272,7 @@ export const getFaceEvents = (params?: { person_id?: string; camera_id?: string;
   client.get<FaceRecognitionEventResponse[]>('/api/watchlist/events', { params }).then((r) => r.data);
 
 export const getUnknownFaceClusters = (days: number = 7, minSightings: number = 2): Promise<{ clusters: any[]; total_unknown: number }> =>
-  client.get<{ clusters: any[]; total_unknown: number }>('/api/watchlist/unknown-faces', { params: { days, min_sightings } }).then((r) => r.data);
+  client.get<{ clusters: any[]; total_unknown: number }>('/api/watchlist/unknown-faces', { params: { days, min_sightings: minSightings } }).then((r) => r.data);
 
 export const getAuditLog = (params?: { person_id?: string; action?: string; limit?: number }): Promise<WatchlistAuditLogResponse[]> =>
   client.get<WatchlistAuditLogResponse[]>('/api/watchlist/audit-log', { params }).then((r) => r.data);
@@ -288,6 +299,20 @@ export const testANPRPlate = (formData: FormData): Promise<TestANPRResult> =>
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
+
+// ─── Face Authentication Endpoints ───────────────────────────────────────────
+
+import type { AuthUser, AuthResponse, RegisterWebcamPayload, LoginWebcamPayload } from '../types';
+
+export const registerFaceWebcam = (data: RegisterWebcamPayload): Promise<AuthResponse> =>
+  client.post<AuthResponse>('/api/auth/register-webcam', data).then((r) => r.data);
+
+export const loginFaceWebcam = (data: LoginWebcamPayload): Promise<AuthResponse> =>
+  client.post<AuthResponse>('/api/auth/login-webcam', data).then((r) => r.data);
+
+export const getMe = (): Promise<AuthUser> =>
+  client.get<AuthUser>('/api/auth/me').then((r) => r.data);
+
 
 
 

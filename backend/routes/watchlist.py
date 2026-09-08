@@ -5,6 +5,7 @@ Handles registration of persons of interest with real face detection,
 SFace 128-D embedding extraction, persistence in SQLite, and test matching.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
@@ -143,7 +144,7 @@ async def register_watchlist_person(
 
     # Run real Face Detection & Embedding Extraction
     face_engine = get_face_engine()
-    success, embedding, error_msg = face_engine.process_registration_image(img_bgr)
+    success, embedding, error_msg, quality_score = face_engine.process_registration_image(img_bgr)
 
     if not success or embedding is None:
         raise HTTPException(
@@ -342,7 +343,7 @@ async def test_face_match(
             message="Face detected. No active targets registered in Watchlist database."
         )
 
-    is_match, pid, pname, ident, priority, sim_pct, cos_score = face_engine.match_against_watchlist(
+    is_match, pid, pname, ident, priority, sim_pct, cos_score, top_candidates = face_engine.match_against_watchlist(
         embedding, watchlist_records, threshold=threshold or 0.45
     )
 
@@ -361,3 +362,19 @@ async def test_face_match(
         threshold_used=threshold or 0.45,
         message=msg
     )
+
+
+@router.get("/{person_id}/photo")
+def get_watchlist_photo(person_id: str, db: Session = Depends(get_db)):
+    """Serves the enrolled photo for a watchlist person."""
+    person = db.query(WatchlistPerson).filter(WatchlistPerson.id == person_id).first()
+    if not person or not person.photo_path:
+        raise HTTPException(status_code=404, detail="Photo not found for this person.")
+    
+    filename = os.path.basename(person.photo_path)
+    photo_abs = os.path.join(STORAGE_DIR, filename)
+    if not os.path.isfile(photo_abs):
+        raise HTTPException(status_code=404, detail="Photo file not found on disk.")
+    
+    return FileResponse(photo_abs)
+
