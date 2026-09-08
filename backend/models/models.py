@@ -70,6 +70,7 @@ class Detection(Base):
     bbox_h                = Column(Float,   default=0.0)
     is_in_restricted_zone = Column(Boolean, default=False)
     loitering_duration    = Column(Integer, nullable=True)
+    behaviour_label       = Column(String(32), nullable=True)   # e.g. "NORMAL_TRANSIT", "PACING", "CIRCLING", "RUNNING"
     timestamp             = Column(DateTime, default=datetime.utcnow, index=True)
     # ── Video-relative frame identity (populated only for uploaded-video detections) ──
     frame_index           = Column(Integer, nullable=True)   # 0-based frame counter
@@ -137,6 +138,7 @@ class Alert(Base):
     bbox_h        = Column(Float,   default=0.0)
     status        = Column(String,  default="NEW", index=True)  # NEW | ACKNOWLEDGED | UNDER_INVESTIGATION | RESOLVED
     snapshot_path = Column(String,  nullable=True)
+    behaviour_label = Column(String(32), nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

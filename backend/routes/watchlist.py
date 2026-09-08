@@ -5,6 +5,7 @@ Handles registration of persons of interest with real face detection,
 SFace 128-D embedding extraction, persistence in SQLite, and test matching.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
@@ -33,6 +34,22 @@ STORAGE_DIR = os.path.join(
     "storage", "watchlist"
 )
 os.makedirs(STORAGE_DIR, exist_ok=True)
+
+# Storage directory for face crops (outside public static mount)
+FACE_CROPS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "storage", "face_crops"
+)
+os.makedirs(FACE_CROPS_DIR, exist_ok=True)
+
+
+@router.get("/face-crops/{filename}")
+def get_face_crop(filename: str):
+    """Serves harvested face crops through the watchlist API rather than public static mount."""
+    file_path = os.path.join(FACE_CROPS_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Face crop not found")
+    return FileResponse(file_path)
 
 
 # Global version counter for watchlist caching
@@ -224,6 +241,23 @@ def get_watchlist_person(person_id: str, db: Session = Depends(get_db)):
         created_at=person.created_at,
         updated_at=person.updated_at or person.created_at,
     )
+
+
+@router.get("/{person_id}/photo")
+def get_watchlist_person_photo(person_id: str, db: Session = Depends(get_db)):
+    """Serves the enrolled photo for a watchlist target."""
+    person = db.query(WatchlistPerson).filter(WatchlistPerson.id == person_id).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Watchlist person not found")
+    if not person.photo_path:
+        raise HTTPException(status_code=404, detail="Person has no photo registered")
+
+    filename = os.path.basename(person.photo_path)
+    file_path = os.path.join(STORAGE_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Photo file not found on disk")
+
+    return FileResponse(file_path)
 
 
 @router.patch("/{person_id}", response_model=WatchlistPersonResponse)

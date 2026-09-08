@@ -3,10 +3,15 @@ import type { Alert, Detection, Camera, Video, Analytics, AlertStatus, Zone } fr
 
 // ─── Axios Client ─────────────────────────────────────────────────────────────
 
+const apiKey = import.meta.env.VITE_API_KEY || 'admin-key';
+
 const client = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
   timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+  },
 });
 
 client.interceptors.response.use(
@@ -261,7 +266,7 @@ export const getFaceEvents = (params?: { person_id?: string; camera_id?: string;
   client.get<FaceRecognitionEventResponse[]>('/api/watchlist/events', { params }).then((r) => r.data);
 
 export const getUnknownFaceClusters = (days: number = 7, minSightings: number = 2): Promise<{ clusters: any[]; total_unknown: number }> =>
-  client.get<{ clusters: any[]; total_unknown: number }>('/api/watchlist/unknown-faces', { params: { days, min_sightings } }).then((r) => r.data);
+  client.get<{ clusters: any[]; total_unknown: number }>('/api/watchlist/unknown-faces', { params: { days, min_sightings: minSightings } }).then((r) => r.data);
 
 export const getAuditLog = (params?: { person_id?: string; action?: string; limit?: number }): Promise<WatchlistAuditLogResponse[]> =>
   client.get<WatchlistAuditLogResponse[]>('/api/watchlist/audit-log', { params }).then((r) => r.data);

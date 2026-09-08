@@ -84,9 +84,9 @@ os.makedirs(os.path.join(STORAGE_ROOT, "snapshots"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots", "faces"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "watchlist"), exist_ok=True)
 
-# Phase 0.2: Only mount snapshots as static — biometric photos and videos
-# are now served via authenticated API endpoints
+# Mount static files: snapshots and watchlist photos
 app.mount("/storage/snapshots", StaticFiles(directory=os.path.join(STORAGE_ROOT, "snapshots")), name="snapshots")
+app.mount("/storage/watchlist", StaticFiles(directory=os.path.join(STORAGE_ROOT, "watchlist")), name="watchlist")
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
 

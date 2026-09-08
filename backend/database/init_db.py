@@ -47,6 +47,10 @@ def _apply_schema_migrations():
         ("face_embeddings",   "photo_path",        "TEXT"),
         ("face_recognition_events", "snapshot_path", "TEXT"),
         ("face_embeddings",   "embedding_blob",    "BLOB"),
+
+        # ── Trajectory & Behavior Engine migrations ──
+        ("detections", "behaviour_label", "TEXT"),
+        ("alerts",     "behaviour_label", "TEXT"),
     ]
     with engine.connect() as conn:
         for table, col, coltype in migrations:

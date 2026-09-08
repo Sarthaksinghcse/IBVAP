@@ -150,6 +150,7 @@ class DetectionCreate(BaseModel):
     bbox:                  BBoxSchema
     is_in_restricted_zone: Optional[bool]  = False
     loitering_duration:    Optional[int]   = None
+    behaviour_label:       Optional[str]   = None
     timestamp:             Optional[datetime] = None
     # Video-relative frame identity — populated only for uploaded-video detections
     frame_index:           Optional[int]   = None
@@ -168,6 +169,7 @@ class DetectionResponse(BaseModel):
     bbox:                  BBoxSchema
     is_in_restricted_zone: bool
     loitering_duration:    Optional[int]   = None
+    behaviour_label:       Optional[str]   = None
     timestamp:             datetime
     # Video-relative frame identity
     frame_index:           Optional[int]   = None
@@ -213,6 +215,7 @@ class AlertCreate(BaseModel):
     confidence_kind: Optional[str] = None   # Phase 4.5 (D2): DETECTION | FACE_MATCH
     bbox:          Optional[BBoxSchema] = None
     snapshot_path: Optional[str]   = None
+    behaviour_label: Optional[str] = None
 
 class AlertUpdate(BaseModel):
     status: AlertStatus
@@ -232,6 +235,7 @@ class AlertResponse(BaseModel):
     bbox:          Optional[BBoxSchema] = None
     status:        AlertStatus
     snapshot_path: Optional[str]   = None
+    behaviour_label: Optional[str] = None
     created_at:    datetime
     updated_at:    datetime
 

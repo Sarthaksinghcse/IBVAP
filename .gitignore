@@ -33,14 +33,18 @@ datasets/
 .tmp/
 tmp/
 *.log
+*.db
 *.db-shm
 *.db-wal
+backend/ibvap.db
 storage/videos/*
 !storage/videos/.gitkeep
 storage/snapshots/*
 !storage/snapshots/.gitkeep
 storage/watchlist/*
 !storage/watchlist/.gitkeep
+storage/face_crops/*
+!storage/face_crops/.gitkeep
 
 # Environment variables
 .env

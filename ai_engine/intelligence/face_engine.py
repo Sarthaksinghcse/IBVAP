@@ -101,16 +101,20 @@ class FaceTrackAccumulator:
                 if r.get("person_id") == best_pid:
                     confirmed = dict(r)
                     confirmed["cosine_score"] = round(median_sim, 4)
-                    confirmed["similarity"] = round(max(0.0, min(100.0, median_sim * 100.0)), 1)
+                    confirmed["similarity"] = round(calibrated_confidence(median_sim), 1)
                     confirmed["consensus_state"] = "CONFIRMED"
                     confirmed["consensus_votes"] = best_count
                     return confirmed
         elif best_count >= CONSENSUS_CANDIDATE_MIN:
             # Candidate — show in UI, don't alert
+            sims = sorted(similarities[best_pid])
+            median_sim = sims[len(sims) // 2]
             for r in reversed(recent):
                 if r.get("person_id") == best_pid:
                     candidate = dict(r)
                     candidate["is_match"] = False  # Don't trigger alert
+                    candidate["cosine_score"] = round(median_sim, 4)
+                    candidate["similarity"] = round(calibrated_confidence(median_sim), 1)
                     candidate["consensus_state"] = "CANDIDATE"
                     candidate["consensus_votes"] = best_count
                     return candidate
@@ -516,13 +520,13 @@ class FaceEngine:
                 "identifier": p["identifier"],
                 "threat_priority": p["threat_priority"],
                 "cosine_score": round(p["cosine"], 4),
-                "similarity": round(max(0.0, min(100.0, p["cosine"] * 100.0)), 1),
+                "similarity": round(cal_conf, 1),
                 "calibrated_confidence": round(cal_conf, 1),
             })
 
         best = sorted_persons[0]
         best_score = best["cosine"]
-        similarity_pct = round(max(0.0, min(100.0, best_score * 100.0)), 1)
+        similarity_pct = round(calibrated_confidence(best_score), 1)
 
         if best_score >= threshold:
             # Check ambiguity margin
@@ -577,7 +581,8 @@ class FaceEngine:
         threshold: float = MATCH_THRESHOLD_STRICT,
         force_refresh: bool = False,
         job_id: str = "",
-        now: Optional[float] = None
+        now: Optional[float] = None,
+        frame_luma: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Evaluates face recognition for a detected person track in a real frame.
@@ -585,8 +590,8 @@ class FaceEngine:
 
         Phase 1.1 fixes: job-scoped cache key, explicit now parameter,
         negative caching with shorter TTL, bounded cache with eviction.
-        Phase 4.1: Results pass through temporal consensus accumulator.
-        Phase 4.6: Low-light CLAHE enhancement on head crop.
+        Phase 4.1 & F1: Results pass through temporal consensus accumulator (on misses and hits).
+        Phase 4.6 & P4: Low-light CLAHE enhancement with frame luma check; head crop 0.7x.
         """
         if now is None:
             now = time.time()
@@ -608,6 +613,8 @@ class FaceEngine:
                 else:
                     ttl = NEG_CACHE_TTL_S
                 if elapsed < ttl:
+                    # F1: Push into consensus accumulator on every evaluation (including cache hits)
+                    cached_result = self._accumulator.push(cache_key, cached_result)
                     return cached_result
 
         # Crop person region from frame
@@ -619,25 +626,23 @@ class FaceEngine:
         x2 = min(w, x1 + pw)
         y2 = min(h, y1 + ph)
 
-        # Upper body / head region focus (top 50% of person bounding box)
-        head_y2 = min(h, y1 + int(ph * 0.55))
+        # Upper body / head region focus (top 70% of person bounding box to avoid missing tilted heads)
+        head_y2 = min(h, y1 + int(ph * 0.70))
         person_head_crop = frame_bgr[y1:head_y2, x1:x2]
 
         if person_head_crop.size == 0:
             res = {"face_detected": False, "is_match": False, "person_name": None, "similarity": 0.0}
             return res
 
-        # Phase 4.6: Low-light enhancement
-        person_head_crop = self._apply_low_light_enhancement(person_head_crop)
+        # Phase 4.6 & P4: Low-light enhancement (rely on precalculated frame_luma if provided)
+        if frame_luma is not None:
+            if frame_luma < LOW_LIGHT_LUMA_THRESHOLD:
+                person_head_crop = self._apply_low_light_enhancement(person_head_crop)
+        else:
+            person_head_crop = self._apply_low_light_enhancement(person_head_crop)
 
+        # Single YuNet pass on the widened head crop (P4: dropped expensive full-crop fallback)
         face_info = self.detect_primary_face(person_head_crop, score_threshold=FACE_DETECT_SCORE)
-        if face_info is None:
-            # Fallback to full person crop if head crop missed angle
-            full_crop = frame_bgr[y1:y2, x1:x2]
-            full_crop = self._apply_low_light_enhancement(full_crop)
-            face_info = self.detect_primary_face(full_crop, score_threshold=FACE_DETECT_SCORE)
-            if face_info is not None:
-                person_head_crop = full_crop
 
         if face_info is None:
             res = {"face_detected": False, "is_match": False, "person_name": None, "similarity": 0.0}

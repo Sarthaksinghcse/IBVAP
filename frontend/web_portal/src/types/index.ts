@@ -171,6 +171,14 @@ export interface ANPRPlateInfo {
   vehicle_type?: string;
 }
 
+export type BehaviourLabel =
+  | 'NORMAL_TRANSIT'
+  | 'STATIONARY'
+  | 'PACING'
+  | 'ERRATIC_MOVEMENT'
+  | 'RUNNING'
+  | 'CIRCLING';
+
 export interface Detection {
   id: string;
   camera_id: string;
@@ -186,6 +194,7 @@ export interface Detection {
   loitering_duration?: number; // seconds
   face_match?: FaceMatch | null;
   plate_info?: ANPRPlateInfo | null;
+  behaviour_label?: BehaviourLabel;
   // Video-relative frame identity — set only for uploaded-video detections
   frame_index?: number;      // 0-based frame counter
   video_time_sec?: number;   // frame_index / source_fps  (ground-truth video time)
@@ -203,10 +212,11 @@ export interface Alert {
   threat_level: ThreatLevel;
   reason: string;
   confidence?: number;
-  confidence_kind?: string;
+  confidence_kind?: 'DETECTION' | 'FACE_MATCH';
   bbox?: BoundingBox;
   status: AlertStatus;
   snapshot_path?: string;
+  behaviour_label?: BehaviourLabel;
   created_at: string;
   updated_at: string;
 }

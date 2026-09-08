@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Tuple
 import requests
 from shapely.geometry import Point, Polygon
 from ai_engine.tracking.tracker import TrackedObject
+from ai_engine.intelligence.behaviour_engine import BehaviourEngine, BehaviourLabel, get_behaviour_engine
 
 logger = logging.getLogger("threat_engine")
 
@@ -47,8 +48,7 @@ class ThreatEngine:
         self.alert_cooldown_seconds = alert_cooldown_seconds
         self.min_confidence = min_confidence
         self.alert_callback = alert_callback
-
-
+        self.behaviour_engine = get_behaviour_engine()
 
         # Configure Source-Specific Restricted Zone Polygon
         self.set_zone(restricted_zone_polygon, zone_name)
@@ -91,19 +91,23 @@ class ThreatEngine:
         track: TrackedObject,
         is_in_zone: bool,
         is_loitering: bool,
-        video_id: Optional[str]
+        video_id: Optional[str],
+        behaviour_label: Optional[BehaviourLabel] = None,
+        behaviour_weight: float = 0.0
     ) -> Tuple[str, str, str, dict]:
         """
         SIH Differentiator 1: Threat-Correlation Engine
-        Combines zone-breach, loitering duration, detection confidence, time of day,
-        and persistence into a single explainable threat assessment (NONE/LOW/MEDIUM/HIGH/CRITICAL)
-        with stated evidence.
+        Combines zone-breach, loitering duration, detection confidence, trajectory behavior,
+        time of day, and persistence into a single explainable threat assessment
+        (NONE/LOW/MEDIUM/HIGH/CRITICAL) with stated evidence.
         """
         from datetime import datetime
         source_label = f"VIDEO {video_id}" if video_id else self.camera_id
         current_hour = datetime.now().hour
         is_night = (current_hour >= 22 or current_hour < 6)
         time_desc = "nighttime surveillance (high sensitivity)" if is_night else "daytime monitoring"
+
+        b_label_str = behaviour_label.value if hasattr(behaviour_label, "value") else (str(behaviour_label) if behaviour_label else "NORMAL_TRANSIT")
 
         evidence = {
             "in_zone": is_in_zone,
@@ -112,6 +116,8 @@ class ThreatEngine:
             "confidence": round(track.confidence, 1),
             "is_night": is_night,
             "frames_tracked": track.frame_count,
+            "behaviour_label": b_label_str,
+            "behaviour_weight": behaviour_weight,
         }
 
         # SIH Differentiator 2: False-Positive Filtering (Animals & Low Confidence)
@@ -123,24 +129,45 @@ class ThreatEngine:
 
         # Person Threat Correlation
         if track.object_type == "PERSON":
+            level = "LOW"
+            event_type = "PERSON_DETECTED"
+            reason_parts = [f"{track.object_label} detected at {source_label}."]
+
             if is_loitering and self.zone_name:
-                reason = (
+                event_type = "LOITERING"
+                level = "CRITICAL"
+                reason_parts = [
                     f"{track.object_label} breached {self.zone_name} at {source_label}, "
                     f"loitered for {int(track.zone_dwell_time)}s (limit: {int(self.loitering_threshold)}s), "
                     f"and maintained {track.confidence:.1f}% confidence during {time_desc}."
-                )
-                return "LOITERING", "CRITICAL", reason, evidence
-
+                ]
             elif is_in_zone and self.zone_name:
+                event_type = "ZONE_INTRUSION"
                 level = "CRITICAL" if is_night else "HIGH"
-                reason = (
+                reason_parts = [
                     f"{track.object_label} entered {self.zone_name} at {source_label} "
                     f"with {track.confidence:.1f}% confidence during {time_desc}."
-                )
-                return "ZONE_INTRUSION", level, reason, evidence
+                ]
 
-            else:
-                return "PERSON_DETECTED", "LOW", f"{track.object_label} detected at {source_label}.", evidence
+            # Incorporate Trajectory Behaviour Analysis
+            if behaviour_label == BehaviourLabel.RUNNING:
+                reason_parts.append("Running detected (velocity-based, instant escalation).")
+                if level in ["NONE", "LOW", "MEDIUM"]:
+                    level = "HIGH"
+            elif behaviour_label == BehaviourLabel.CIRCLING:
+                reason_parts.append("Circular/surveillance movement pattern detected.")
+                if level in ["NONE", "LOW", "MEDIUM"]:
+                    level = "HIGH"
+            elif behaviour_label == BehaviourLabel.PACING:
+                reason_parts.append("Pacing behaviour (back-and-forth) detected.")
+                if level in ["NONE", "LOW"]:
+                    level = "MEDIUM"
+            elif behaviour_label == BehaviourLabel.ERRATIC_MOVEMENT:
+                reason_parts.append("Erratic movement pattern detected.")
+                if level in ["NONE", "LOW"]:
+                    level = "MEDIUM"
+
+            return event_type, level, " ".join(reason_parts), evidence
 
         # Vehicle Threat Correlation
         elif track.object_type == "VEHICLE":
@@ -163,9 +190,22 @@ class ThreatEngine:
         current_time = time.time()
         processed_detections = []
 
+        # Clean up stale/lost tracks in trajectory store
+        active_ids = {t.track_id for t in tracks}
+        for stored_id in list(self.behaviour_engine._trajectories.keys()):
+            if stored_id not in active_ids:
+                self.behaviour_engine.remove(stored_id)
+
         for track in tracks:
             bx, by = track.bottom_center
             pt = Point(bx, by)
+
+            # Update Trajectory Store & Behavior Engine
+            cx = float(track.bbox.get("x", 0.0) + track.bbox.get("w", 0.0) / 2.0)
+            cy = float(track.bbox.get("y", 0.0) + track.bbox.get("h", 0.0) / 2.0)
+            self.behaviour_engine.update(track.track_id, cx, cy, current_time)
+            behaviour_label, behaviour_weight = self.behaviour_engine.classify(track.track_id)
+            b_label_str = behaviour_label.value if hasattr(behaviour_label, "value") else str(behaviour_label)
 
             # 1. Evaluate Restricted Zone Geometry (Source-Specific)
             is_in_zone = False
@@ -201,7 +241,9 @@ class ThreatEngine:
                 track=track,
                 is_in_zone=is_in_zone,
                 is_loitering=is_loitering,
-                video_id=video_id
+                video_id=video_id,
+                behaviour_label=behaviour_label,
+                behaviour_weight=behaviour_weight
             )
 
             # If plate is detected, reflect in event_type if not higher-priority zone intrusion
@@ -224,6 +266,7 @@ class ThreatEngine:
                 "is_in_restricted_zone": is_in_zone,
                 "loitering_duration": int(zone_dwell) if is_in_zone else None,
                 "plate_info": plate_info,
+                "behaviour_label": b_label_str,
             }
 
             # 5. POST Detection Event to FastAPI (Detection != Alert)
