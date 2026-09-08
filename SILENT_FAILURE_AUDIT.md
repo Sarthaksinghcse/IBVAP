@@ -103,3 +103,43 @@ canned input.
    inference, flagged for completeness since it matched the grep pattern.
 
 No component outside `anpr_engine.py` requires a code change as a result of this audit.
+
+---
+
+## 4. Operator action item — `test_anpr.py` writes to the production DB (Amendment 03 §C2)
+
+**File:** `backend/test_anpr.py:183-213`. **Not fixed here** — this file is under `backend/`,
+and R3 forbids the agent from modifying anything there. Reported for the operator only.
+
+`test_anpr.py`'s "TEST 8" (SQLite persistence check) does the following against the *real*
+production database, not a disposable fixture:
+
+```python
+db = SessionLocal()                    # backend/database/database.py — the live ibvap.db
+...
+anpr_rec = ANPREvent(id=test_event_id, plate_text="KA05MJ4411", plate_confidence=92.5, ...)
+db.add(anpr_rec)
+db.commit()                            # <- committed to the demo database here (line ~195)
+...
+assert fetched.plate_text == "KA05MJ4411"
+assert fetched.plate_status == "READABLE"
+...
+db.delete(fetched)                     # <- only removed here (line 213), after assertions
+```
+
+**The bug:** the write is committed before the assertions run and only cleaned up after they
+pass. If any assertion between the commit and the delete fails — or the process crashes,
+or someone Ctrl-C's the test run — `KA05MJ4411` at 92.5% confidence is left permanently in
+the same table the ANPR dashboard reads from, indistinguishable from a genuine detection.
+
+**Verified clean at Task 2.5 audit time:** zero rows matching `KA05MJ4411` or the
+`test-anpr-*` id pattern were present in `anpr_events`. No residue today. But the risk is
+real and structural, not hypothetical — it is one aborted test run away from injecting a
+fabricated plate into demo data, which is a worse failure than any of this task's other
+findings because it would look exactly like a real result.
+
+**Recommended fix (for the operator to apply or assign, not performed here):** point
+`test_anpr.py` at a disposable SQLite file via a pytest fixture (e.g. `tmp_path` + a
+throwaway `SessionLocal` bound to `sqlite:///{tmp_path}/test.db`), or wrap the whole test in
+a transaction that is rolled back in a `finally` block regardless of assertion outcome.
+Either removes the production DB as a target entirely, which is the safer of the two.
