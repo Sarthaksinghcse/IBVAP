@@ -16,7 +16,8 @@ import requests
 import websockets
 
 # Path setup
-sys.path.insert(0, r"E:\IBVAP")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
 
 from ai_engine.detection.detector import Detector
 from ai_engine.tracking.tracker import Tracker

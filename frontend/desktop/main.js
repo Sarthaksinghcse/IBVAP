@@ -6,6 +6,7 @@ const path = require('path');
 const { spawn, execSync } = require('child_process');
 const http = require('http');
 const fs = require('fs');
+const { reportZoneBreach, reportLoitering, reportFaceMatch, isConfigured } = require('./intrusion-reporter');
 
 // ─── Paths ───────────────────────────────────────────────────────────────────
 
@@ -475,6 +476,94 @@ function setupIPC() {
 
   // Check if running in desktop mode
   ipcMain.handle('is-desktop', () => true);
+
+  // ─── Intrusion & Threat Reporting (Supabase Cloud Sync) ─────────────────
+  ipcMain.handle('report-zone-breach', async (_, data) => {
+    return await reportZoneBreach(data);
+  });
+
+  ipcMain.handle('report-loitering', async (_, data) => {
+    return await reportLoitering(data);
+  });
+
+  ipcMain.handle('report-face-match', async (_, data) => {
+    return await reportFaceMatch(data);
+  });
+}
+
+// ─── Real-time AI Alerts Forwarder (WebSocket -> Supabase) ──────────────────
+
+function startAlertsSync() {
+  const wsUrl = `ws://127.0.0.1:${BACKEND_PORT}/ws/alerts`;
+  let ws = null;
+  let reconnectTimer = null;
+
+  function connect() {
+    if (isQuitting) return;
+    try {
+      if (typeof WebSocket === 'undefined') return;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('[IBVAP] Connected to alerts WebSocket for Supabase cloud sync');
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const payload = typeof event.data === 'string' ? JSON.parse(event.data) : JSON.parse(event.data.toString());
+          if (payload.type === 'ALERT' && payload.data) {
+            const a = payload.data;
+            const eventType = String(a.event_type || '').toUpperCase();
+            if (eventType.includes('ZONE') || eventType.includes('BREACH') || eventType.includes('INTRUSION')) {
+              await reportZoneBreach({
+                cameraId: a.camera_id,
+                objectType: a.object_type,
+                objectId: a.object_id,
+                confidence: a.confidence,
+                movementAnalysis: a.reason,
+                latitude: a.latitude,
+                longitude: a.longitude,
+              });
+            } else if (eventType.includes('LOITER')) {
+              await reportLoitering({
+                cameraId: a.camera_id,
+                objectType: a.object_type,
+                objectId: a.object_id,
+                confidence: a.confidence,
+                movementAnalysis: a.reason,
+                latitude: a.latitude,
+                longitude: a.longitude,
+              });
+            } else if (eventType.includes('FACE') || eventType.includes('WATCHLIST')) {
+              await reportFaceMatch({
+                cameraId: a.camera_id,
+                personName: a.object_id || a.reason,
+                confidence: a.confidence,
+                movementAnalysis: a.reason,
+                latitude: a.latitude,
+                longitude: a.longitude,
+              });
+            }
+          }
+        } catch (err) {
+          // Log parsing error silently
+        }
+      };
+
+      ws.onerror = () => {};
+      ws.onclose = () => {
+        if (!isQuitting) {
+          reconnectTimer = setTimeout(connect, 5000);
+        }
+      };
+    } catch {
+      if (!isQuitting) {
+        reconnectTimer = setTimeout(connect, 5000);
+      }
+    }
+  }
+
+  connect();
 }
 
 // ─── App Lifecycle ───────────────────────────────────────────────────────────
@@ -506,6 +595,7 @@ app.whenReady().then(async () => {
   try {
     await startBackend();
     console.log('[IBVAP] Backend ready');
+    startAlertsSync();
   } catch (err) {
     console.error('[IBVAP] Backend failed to start:', err);
     return;

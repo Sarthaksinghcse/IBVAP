@@ -24,4 +24,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onNavigate: (callback) => {
     ipcRenderer.on('navigate', (_, route) => callback(route));
   },
+
+  // ─── Intrusion & Threat Reporting (Supabase Cloud Sync) ─────────────────
+  reportZoneBreach: (data) => ipcRenderer.invoke('report-zone-breach', data),
+  reportLoitering: (data) => ipcRenderer.invoke('report-loitering', data),
+  reportFaceMatch: (data) => ipcRenderer.invoke('report-face-match', data),
 });
