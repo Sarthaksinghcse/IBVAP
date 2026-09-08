@@ -139,7 +139,7 @@ def system_status():
         "backend_status": "ONLINE",
         "ai_engine_status": "RUNNING" if yolo_exists else "ERROR",
         "database_status": "OK",
-        "model_name": "YOLOv8n + DeepSORT",
+        "model_name": "YOLOv8n + ByteTrack",
         "models": {
             "yolov8": yolo_exists,
             "face_recognition": face_exists,

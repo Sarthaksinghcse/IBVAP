@@ -13,7 +13,7 @@ import type { Alert, Detection, EventType, ObjectType, ThreatLevel } from '../..
 const rand = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
-const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+const pick = <T>(arr: readonly T[] | T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
 const uid = () => Math.random().toString(36).slice(2, 10).toUpperCase();
 
@@ -21,10 +21,44 @@ const CAMERAS = ['BOP-01', 'BOP-02', 'BOP-03', 'BOP-05', 'BOP-07'];
 
 // ─── Event Generators ─────────────────────────────────────────────────────────
 
+function generateTrajectory(cx: number, cy: number, behaviour: string): [number, number][] {
+  const points: [number, number][] = [];
+  const steps = rand(6, 12);
+  let curX = cx - (steps * (behaviour === 'RUNNING' ? 2.5 : 1.2));
+  let curY = cy - (steps * (behaviour === 'CIRCLING' ? 1.8 : 0.6));
+
+  for (let i = 0; i < steps; i++) {
+    const jitterX = behaviour === 'ERRATIC_MOVEMENT' ? rand(-3, 3) : rand(-1, 1);
+    const jitterY = behaviour === 'PACING' ? ((i % 2 === 0 ? 2 : -2)) : rand(-1, 1);
+    points.push([
+      Math.max(2, Math.min(98, curX + jitterX)),
+      Math.max(2, Math.min(98, curY + jitterY))
+    ]);
+    curX += (cx - curX) / (steps - i);
+    curY += (cy - curY) / (steps - i);
+  }
+  points.push([cx, cy]);
+  return points;
+}
+
 function generatePersonDetection(cameraId: string): Detection {
   const objId = `Person #${rand(1, 25)}`;
   const inZone = Math.random() < 0.25;
   const loitering = inZone && Math.random() < 0.5;
+  const behaviours: import('../../types').BehaviourLabel[] = [
+    'NORMAL_TRANSIT', 'RUNNING', 'CIRCLING', 'PACING', 'ERRATIC_MOVEMENT', 'STATIONARY'
+  ];
+  const zoneBehaviours: import('../../types').BehaviourLabel[] = [
+    'RUNNING', 'CIRCLING', 'PACING', 'ERRATIC_MOVEMENT'
+  ];
+  const behaviour = inZone ? pick(zoneBehaviours) : pick(behaviours);
+
+  const bx = rand(5, 75);
+  const by = rand(10, 50);
+  const bw = rand(8, 16);
+  const bh = rand(30, 55);
+  const cx = bx + bw / 2;
+  const cy = by + bh / 2;
 
   return {
     id: `det-${uid()}`,
@@ -39,11 +73,16 @@ function generatePersonDetection(cameraId: string): Detection {
       ? 'LOITERING'
       : ('PERSON_DETECTED' as EventType),
     bbox: {
-      x: rand(5, 75),
-      y: rand(10, 50),
-      w: rand(8, 16),
-      h: rand(30, 55),
+      x: bx,
+      y: by,
+      w: bw,
+      h: bh,
     },
+    behaviour_label: behaviour,
+    trajectory: generateTrajectory(cx, cy, behaviour),
+    velocity: behaviour === 'RUNNING' ? rand(26, 42) : behaviour === 'STATIONARY' ? rand(0, 1) : rand(5, 18),
+    tortuosity: behaviour === 'CIRCLING' ? Number((rand(28, 55) / 10).toFixed(1)) : 1.2,
+    direction_changes: behaviour === 'PACING' ? rand(4, 8) : behaviour === 'ERRATIC_MOVEMENT' ? rand(3, 6) : rand(0, 2),
     timestamp: new Date().toISOString(),
     is_in_restricted_zone: inZone,
     loitering_duration: loitering ? rand(15, 90) : undefined,
@@ -51,6 +90,13 @@ function generatePersonDetection(cameraId: string): Detection {
 }
 
 function generateVehicleDetection(cameraId: string): Detection {
+  const bx = rand(10, 60);
+  const by = rand(45, 65);
+  const bw = rand(20, 35);
+  const bh = rand(15, 28);
+  const cx = bx + bw / 2;
+  const cy = by + bh / 2;
+
   return {
     id: `det-${uid()}`,
     camera_id: cameraId,
@@ -59,11 +105,16 @@ function generateVehicleDetection(cameraId: string): Detection {
     confidence: rand(88, 98),
     event_type: 'VEHICLE_DETECTED' as EventType,
     bbox: {
-      x: rand(10, 60),
-      y: rand(45, 65),
-      w: rand(20, 35),
-      h: rand(15, 28),
+      x: bx,
+      y: by,
+      w: bw,
+      h: bh,
     },
+    behaviour_label: 'NORMAL_TRANSIT',
+    trajectory: generateTrajectory(cx, cy, 'NORMAL_TRANSIT'),
+    velocity: rand(20, 45),
+    tortuosity: 1.05,
+    direction_changes: 0,
     timestamp: new Date().toISOString(),
     is_in_restricted_zone: false,
   };
@@ -80,11 +131,15 @@ function generateAlertFromDetection(det: Detection): Alert {
   else if (det.object_type === 'VEHICLE') threatLevel = 'MEDIUM';
 
   const reasons: Record<string, string> = {
-    ZONE_INTRUSION: `${det.object_id} entered ${det.zone || 'restricted zone'} and stayed for ${det.loitering_duration ?? 0}s. Confidence: ${det.confidence}%.`,
+    ZONE_INTRUSION: `${det.object_id} entered ${det.zone || 'restricted zone'} (${det.behaviour_label || 'MOTION'}). Stayed for ${det.loitering_duration ?? 0}s. Confidence: ${det.confidence}%.`,
     LOITERING: `${det.object_id} detected loitering near perimeter for ${det.loitering_duration ?? 15}s.`,
     VEHICLE_DETECTED: `Unidentified vehicle (${det.object_id}) detected in monitored area.`,
     PERSON_DETECTED: `${det.object_id} detected in monitored zone. Confidence: ${det.confidence}%.`,
   };
+
+  // Generate SVG data URI snapshot for rich mock preview
+  const strokeColor = threatLevel === 'CRITICAL' ? '#ef4444' : threatLevel === 'HIGH' ? '#f97316' : '#eab308';
+  const mockSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" fill="%230b0f19"><rect width="640" height="360" fill="%230c101c"/><path d="M0 0h640v360H0z" fill="none" stroke="%231f293d" stroke-width="2"/><text x="20" y="35" font-family="monospace" font-size="14" font-weight="bold" fill="%2394a3b8">CAMERA: ${det.camera_id} • REALTIME AI FORENSIC SNAPSHOT</text><rect x="180" y="80" width="160" height="200" fill="none" stroke="${encodeURIComponent(strokeColor)}" stroke-width="3" stroke-dasharray="6,4"/><text x="185" y="72" font-family="monospace" font-size="13" font-weight="bold" fill="${encodeURIComponent(strokeColor)}">${threatLevel} | ${encodeURIComponent(det.object_id)}</text><text x="20" y="340" font-family="sans-serif" font-size="12" fill="%23cbd5e1">${encodeURIComponent(det.behaviour_label ? 'BEHAVIOR: ' + det.behaviour_label + ' • ' : '')}COORDINATES: X=${det.bbox.x}% Y=${det.bbox.y}%</text></svg>`;
 
   return {
     id: `alert-${uid()}`,
@@ -95,6 +150,10 @@ function generateAlertFromDetection(det: Detection): Alert {
     object_id: det.object_id,
     threat_level: threatLevel,
     reason: reasons[det.event_type] || `${det.event_type} detected by AI engine.`,
+    confidence: det.confidence,
+    bbox: det.bbox,
+    behaviour_label: det.behaviour_label,
+    snapshot_path: mockSvg,
     status: 'NEW',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),

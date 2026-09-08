@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { Loader2, Camera, Video, VideoOff, AlertCircle, RotateCcw, ArrowLeft, ShieldAlert, LayoutGrid, Maximize2, Plus, WifiOff } from 'lucide-react';
+import { Loader2, Camera, Video, VideoOff, AlertCircle, RotateCcw, ArrowLeft, ShieldAlert, LayoutGrid, Maximize2, Plus, WifiOff, Route } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { LiveBadge } from '../ui/Badge';
 import { ZoneEditorModal } from '../monitoring/ZoneEditorModal';
@@ -163,6 +163,11 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
             )}
           </>
         )}
+        {det.velocity != null && det.velocity > 0 && (
+          <span className="ml-0.5 opacity-80 font-mono text-[8px] bg-black/40 px-1 rounded-xs">
+            {det.velocity}%/s
+          </span>
+        )}
         {isIntrusion && <span className="ml-1 bg-red-700/90 px-1 rounded-xs">🚨 ZONE INTRUSION</span>}
         {isUnknownFace && !isWatchlist && <span className="ml-1 bg-slate-700/80 px-1 rounded-xs text-[8px]">👤 FACE: UNKNOWN</span>}
         {isVehicle && plateInfo && plateInfo.plate_status === 'READABLE' && plateInfo.plate_text && (
@@ -244,6 +249,92 @@ function RestrictedZoneOverlay({ zone }: { zone?: Zone }) {
   );
 }
 
+function TrajectoryOverlay({ detections, showTrajectories }: { detections: Detection[]; showTrajectories: boolean }) {
+  if (!showTrajectories || detections.length === 0) return null;
+
+  const tracksWithTraj = detections.filter(
+    (d) => d.trajectory && d.trajectory.length >= 2
+  );
+
+  if (tracksWithTraj.length === 0) return null;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-14 overflow-hidden">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
+        <defs>
+          <filter id="trajGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="0.4" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+        {tracksWithTraj.map((det) => {
+          const b = det.behaviour_label;
+          const color =
+            b === 'RUNNING' ? '#ef4444' :
+            b === 'CIRCLING' ? '#f97316' :
+            b === 'PACING' ? '#eab308' :
+            b === 'ERRATIC_MOVEMENT' ? '#c084fc' :
+            b === 'STATIONARY' ? '#94a3b8' :
+            '#10b981';
+
+          const pointsStr = det.trajectory!.map(([x, y]) => `${x},${y}`).join(' ');
+          const firstPoint = det.trajectory![0];
+          const lastPoint = det.trajectory![det.trajectory!.length - 1];
+
+          return (
+            <g key={`traj-${det.id || det.object_id}`}>
+              {/* Diffuse glow line */}
+              <polyline
+                points={pointsStr}
+                fill="none"
+                stroke={color}
+                strokeWidth="0.8"
+                opacity="0.35"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              {/* Sharp primary trajectory path */}
+              <polyline
+                points={pointsStr}
+                fill="none"
+                stroke={color}
+                strokeWidth="0.45"
+                strokeDasharray={b === 'ERRATIC_MOVEMENT' ? '1.5,0.8' : undefined}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.9"
+                filter="url(#trajGlow)"
+              />
+              {/* Origin anchor dot */}
+              <circle
+                cx={firstPoint[0]}
+                cy={firstPoint[1]}
+                r="0.5"
+                fill={color}
+                opacity="0.5"
+              />
+              {/* Target current position dot */}
+              <circle
+                cx={lastPoint[0]}
+                cy={lastPoint[1]}
+                r="0.85"
+                fill={color}
+                opacity="0.9"
+              />
+              <circle
+                cx={lastPoint[0]}
+                cy={lastPoint[1]}
+                r="0.45"
+                fill="#ffffff"
+              />
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function CameraThumbnail({ cameraId, location, isActive, isOnline, onClick }: { cameraId:string;location:string;isActive:boolean;isOnline:boolean;onClick:()=>void }) {
   return (
     <div onClick={onClick} className={`flex-shrink-0 w-24 rounded-xl cursor-pointer border transition-all duration-150 ${isActive?'border-[#22c55e] bg-[#13271d] light:bg-[#ecfdf5] light:border-[#86efac]':'border-[#272b37] light:border-[#d3d8e3] bg-[#191c24] light:bg-slate-50 hover:border-slate-500'}`}>
@@ -290,6 +381,7 @@ export function CCTVPanel() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [modalSource, setModalSource] = useState<{ id: string; type: 'CAMERA' | 'WEBCAM' | 'VIDEO' } | null>(null);
   const [viewMode, setViewMode] = useState<'FOCUS' | 'GRID'>('FOCUS');
+  const [showTrajectories, setShowTrajectories] = useState(true);
 
 
   useEffect(() => {
@@ -844,6 +936,21 @@ export function CCTVPanel() {
                 <span>{hasZoneConfigured ? activeZone.name : 'Configure Zone'}</span>
               </button>
 
+              {/* Trajectory Motion Trails Toggle Button */}
+              <button
+                type="button"
+                onClick={() => setShowTrajectories((prev) => !prev)}
+                className={`text-[10px] font-mono px-2 py-1 rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs font-semibold ${
+                  showTrajectories
+                    ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 light:text-emerald-700 border-emerald-500/30 light:border-emerald-200 light:bg-emerald-50'
+                    : 'bg-[#191c24] light:bg-slate-100 hover:bg-slate-700 light:hover:bg-slate-200 text-[#9aa2b5] light:text-slate-700 border-[#272b37] light:border-[#d9dde3]'
+                }`}
+                title="Toggle real-time trajectory motion breadcrumbs"
+              >
+                <Route size={12} className={showTrajectories ? 'text-emerald-400 light:text-emerald-600' : 'text-[#9aa2b5] light:text-slate-500'} />
+                <span>Trails {showTrajectories ? 'ON' : 'OFF'}</span>
+              </button>
+
               <span className="text-[10px] font-mono text-[#9aa2b5] light:text-slate-500 font-medium">{systemStatus.fps.toFixed(1)} FPS • {systemStatus.processing_time_ms}ms</span>
               <LiveBadge/>
             </div>
@@ -1068,6 +1175,7 @@ export function CCTVPanel() {
             {overlayStyle && (isVideoReady || isCctvLive || isCameraMode) && (
               <div className="absolute z-20 pointer-events-none" style={overlayStyle}>
                 {showRestrictedZone && <RestrictedZoneOverlay zone={activeZone} />}
+                <TrajectoryOverlay detections={activeFrameDetections} showTrajectories={showTrajectories} />
                 {settings.showBoundingBoxes &&
                   activeFrameDetections.map((det) => (
                     <BoundingBox key={det.id} det={det} showConfidence={settings.showConfidence} />

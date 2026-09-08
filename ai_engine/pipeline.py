@@ -334,6 +334,16 @@ class IBVAPPipeline:
 
                         cv2.rectangle(display_frame, (x1, y1), (x1 + w_b, y1 + h_b), box_color, 2)
 
+                        # Draw trajectory breadcrumbs
+                        if hasattr(track, 'trajectory') and len(track.trajectory) > 1:
+                            t_pts = [
+                                (int((pt[0] / 100.0) * w_f), int((pt[1] / 100.0) * h_f))
+                                for pt in track.trajectory
+                            ]
+                            for i in range(1, len(t_pts)):
+                                cv2.line(display_frame, t_pts[i - 1], t_pts[i], box_color, 2)
+                            cv2.circle(display_frame, t_pts[-1], 4, (0, 255, 255), -1)
+
                         # Show label with behaviour tag
                         display_label = f"{track.object_label}"
                         if b_str != "NORMAL_TRANSIT":

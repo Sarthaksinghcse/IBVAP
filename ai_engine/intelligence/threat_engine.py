@@ -14,7 +14,8 @@ from pathlib import Path
 import requests
 from shapely.geometry import Point, Polygon, box
 
-SNAPSHOT_DIR = Path("storage/snapshots")
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+SNAPSHOT_DIR = REPO_ROOT / "storage" / "snapshots"
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 def save_annotated_snapshot(frame, bbox_dict, track_id, threat_level, reason) -> Optional[str]:
@@ -39,7 +40,7 @@ def save_annotated_snapshot(frame, bbox_dict, track_id, threat_level, reason) ->
         filename = f"{threat_level}_{track_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
         path = SNAPSHOT_DIR / filename
         cv2.imwrite(str(path), annotated)
-        return f"storage/snapshots/{filename}"
+        return f"/storage/snapshots/{filename}"
     except Exception as e:
         logger.error(f"[ThreatEngine] Error saving snapshot: {e}")
         return None
@@ -310,6 +311,13 @@ class ThreatEngine:
                 elif plate_info.get("plate_status") == "UNREADABLE":
                     event_type = "UNREADABLE_PLATE"
 
+            # Extract trajectory history and behavioural dynamics
+            rec = self.behaviour_engine._trajectories.get(track.track_id)
+            vel = round(rec.current_velocity(), 2) if rec else 0.0
+            tort = round(rec.path_tortuosity(), 2) if rec else 1.0
+            dir_c = rec.direction_changes() if rec else 0
+            traj = [[round(p[0], 2), round(p[1], 2)] for p in track.trajectory] if hasattr(track, 'trajectory') else []
+
             # 4. Build Detection Event Payload
             det_payload = {
                 "camera_id": self.camera_id,
@@ -324,6 +332,10 @@ class ThreatEngine:
                 "loitering_duration": int(zone_dwell) if is_in_zone else None,
                 "plate_info": plate_info,
                 "behaviour_label": b_label_str,
+                "trajectory": traj,
+                "velocity": vel,
+                "tortuosity": tort,
+                "direction_changes": dir_c,
             }
 
             # 5. POST Detection Event to FastAPI (Detection != Alert)

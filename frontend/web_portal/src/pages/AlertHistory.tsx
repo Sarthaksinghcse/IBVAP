@@ -1,20 +1,25 @@
 import { useState, useMemo } from 'react';
-import { Search, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Filter, ChevronLeft, ChevronRight, Camera, X, Download } from 'lucide-react';
 import { useAlerts } from '../hooks/useAlerts';
 import { useStore } from '../store/useStore';
 import { ThreatBadge, StatusBadge } from '../components/ui/Badge';
 import { formatHistoryTimestamp } from '../utils/time';
+import { getSnapshotUrl } from '../components/alerts/AlertCard';
 import type { ThreatLevel, AlertStatus } from '../types';
 
 const PAGE_SIZE = 10;
 
 const EVENT_LABELS: Record<string, string> = {
+  WATCHLIST_MATCH:     'Watchlist Target',
   ZONE_INTRUSION:      'Zone Intrusion',
   LOITERING:           'Loitering',
   PERSON_DETECTED:     'Person Detected',
   VEHICLE_DETECTED:    'Vehicle Detected',
   SUSPICIOUS_ACTIVITY: 'Suspicious Activity',
   THREAT_CORRELATION:  'Threat Correlation',
+  PLATE_DETECTED:      'Plate Detected',
+  UNREADABLE_PLATE:    'Unreadable Plate',
+  WATCHLIST_PLATE_MATCH:'Watchlist Vehicle',
 };
 
 export default function AlertHistory() {
@@ -28,6 +33,7 @@ export default function AlertHistory() {
   const [statusFilter, setStatus] = useState<AlertStatus | 'ALL'>('ALL');
   const [camFilter, setCam]     = useState('ALL');
   const [page, setPage]         = useState(1);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<{ url: string; id: string; title: string } | null>(null);
 
   const cameras = [...new Set(alerts.map((a) => a.camera_id))].sort();
 
@@ -99,6 +105,7 @@ export default function AlertHistory() {
             <tr className="border-b border-[#272b37] light:border-[#d3d8e3] bg-[#191c24] light:bg-slate-50 text-[#9aa2b5] light:text-slate-600 font-semibold">
               <th className="px-4 py-3 text-left">Threat</th>
               <th className="px-4 py-3 text-left">Event</th>
+              <th className="px-4 py-3 text-left">Evidence</th>
               <th className="px-4 py-3 text-left">Camera</th>
               <th className="px-4 py-3 text-left">Object</th>
               <th className="px-4 py-3 text-left hidden sm:table-cell">Reason</th>
@@ -109,7 +116,7 @@ export default function AlertHistory() {
           <tbody className="divide-y divide-[#272b37] light:divide-[#d3d8e3]">
             {pageAlerts.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-[#62697b] light:text-slate-400">
+                <td colSpan={8} className="px-4 py-12 text-center text-[#62697b] light:text-slate-400">
                   No alerts match your filter criteria
                 </td>
               </tr>
@@ -124,6 +131,24 @@ export default function AlertHistory() {
                   </td>
                   <td className="px-4 py-3 font-semibold text-white light:text-slate-900">
                     {EVENT_LABELS[alert.event_type] || alert.event_type}
+                  </td>
+                  <td className="px-4 py-3">
+                    {alert.snapshot_path ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSnapshot({
+                          url: getSnapshotUrl(alert.snapshot_path)!,
+                          id: alert.alert_id,
+                          title: `${EVENT_LABELS[alert.event_type] || alert.event_type} • ${alert.camera_id}`
+                        })}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 light:text-emerald-700 text-[10px] font-mono border border-emerald-500/30 transition-all cursor-pointer font-semibold shadow-xs"
+                      >
+                        <Camera size={11} />
+                        <span>Photo</span>
+                      </button>
+                    ) : (
+                      <span className="text-[#62697b] light:text-slate-400 text-[10px] font-mono">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 font-mono text-[#9aa2b5] light:text-slate-600">
                     {alert.video_id ? `Clip · ${alert.camera_id}` : alert.camera_id}
@@ -173,6 +198,46 @@ export default function AlertHistory() {
           </div>
         )}
       </div>
+
+      {/* ── Snapshot Lightbox Modal ──────────────────────────────── */}
+      {selectedSnapshot && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-[fadeIn_0.2s_ease-out]">
+          <div className="relative max-w-3xl w-full bg-[#121419] border border-[#272b37] rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="px-4 py-3 bg-[#191c24] border-b border-[#272b37] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Camera className="text-emerald-400" size={16} />
+                <span className="text-sm font-bold text-white font-mono">{selectedSnapshot.id}</span>
+                <span className="text-xs text-[#9aa2b5]">({selectedSnapshot.title})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={selectedSnapshot.url}
+                  download={`evidence_${selectedSnapshot.id}.png`}
+                  className="p-1.5 rounded-lg bg-[#272b37] hover:bg-[#323746] text-white transition-colors cursor-pointer"
+                  title="Download image"
+                >
+                  <Download size={14} />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSnapshot(null)}
+                  className="p-1.5 rounded-lg bg-[#272b37] hover:bg-red-500/30 text-white hover:text-red-400 transition-colors cursor-pointer"
+                  title="Close modal"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+            <div className="p-4 flex-1 overflow-auto flex items-center justify-center bg-black/80">
+              <img
+                src={selectedSnapshot.url}
+                alt={selectedSnapshot.id}
+                className="max-w-full max-h-[65vh] object-contain rounded-lg border border-[#272b37] shadow-xl"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

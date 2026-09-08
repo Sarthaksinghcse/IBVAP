@@ -68,7 +68,13 @@ async def create_detection(data: DetectionCreate, db: Session = Depends(get_db))
     db.commit()
     db.refresh(det)
 
-    resp = _to_response(det)
+    resp = _to_response(
+        det,
+        trajectory=data.trajectory,
+        velocity=data.velocity,
+        tortuosity=data.tortuosity,
+        direction_changes=data.direction_changes
+    )
     await manager.broadcast({
         "type": "DETECTION",
         "data": resp,
@@ -78,7 +84,13 @@ async def create_detection(data: DetectionCreate, db: Session = Depends(get_db))
     return resp
 
 
-def _to_response(det: Detection) -> dict:
+def _to_response(
+    det: Detection,
+    trajectory: Optional[List[List[float]]] = None,
+    velocity: Optional[float] = None,
+    tortuosity: Optional[float] = None,
+    direction_changes: Optional[int] = None
+) -> dict:
     """Convert ORM object to response dict (bbox and plate_info need reconstruction)."""
     p_info = None
     if det.plate_status and det.plate_status != "NOT_DETECTED":
@@ -112,6 +124,10 @@ def _to_response(det: Detection) -> dict:
         "is_in_restricted_zone": det.is_in_restricted_zone,
         "loitering_duration":    det.loitering_duration,
         "behaviour_label":       det.behaviour_label,
+        "trajectory":            trajectory,
+        "velocity":              velocity,
+        "tortuosity":            tortuosity,
+        "direction_changes":     direction_changes,
         "timestamp":             det.timestamp,
         "frame_index":           det.frame_index,
         "video_time_sec":        det.video_time_sec,

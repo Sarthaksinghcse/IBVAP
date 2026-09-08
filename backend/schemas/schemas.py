@@ -151,6 +151,10 @@ class DetectionCreate(BaseModel):
     is_in_restricted_zone: Optional[bool]  = False
     loitering_duration:    Optional[int]   = None
     behaviour_label:       Optional[str]   = None
+    trajectory:            Optional[List[List[float]]] = None
+    velocity:              Optional[float] = None
+    tortuosity:            Optional[float] = None
+    direction_changes:     Optional[int]   = None
     timestamp:             Optional[datetime] = None
     # Video-relative frame identity — populated only for uploaded-video detections
     frame_index:           Optional[int]   = None
@@ -170,6 +174,10 @@ class DetectionResponse(BaseModel):
     is_in_restricted_zone: bool
     loitering_duration:    Optional[int]   = None
     behaviour_label:       Optional[str]   = None
+    trajectory:            Optional[List[List[float]]] = None
+    velocity:              Optional[float] = None
+    tortuosity:            Optional[float] = None
+    direction_changes:     Optional[int]   = None
     timestamp:             datetime
     # Video-relative frame identity
     frame_index:           Optional[int]   = None

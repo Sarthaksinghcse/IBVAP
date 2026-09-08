@@ -195,6 +195,10 @@ export interface Detection {
   face_match?: FaceMatch | null;
   plate_info?: ANPRPlateInfo | null;
   behaviour_label?: BehaviourLabel;
+  trajectory?: [number, number][]; // [[x, y], ...] in % coordinates [0..100]
+  velocity?: number;               // %/sec
+  tortuosity?: number;             // ratio of path length to displacement
+  direction_changes?: number;      // count of sharp direction reversals
   // Video-relative frame identity — set only for uploaded-video detections
   frame_index?: number;      // 0-based frame counter
   video_time_sec?: number;   // frame_index / source_fps  (ground-truth video time)
