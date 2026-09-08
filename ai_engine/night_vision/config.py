@@ -69,10 +69,13 @@ class NightVisionConfig:
     clahe_clip_night: float = 2.5
     clahe_clip_extreme: float = 3.5
 
-    # ── Gamma correction (gamma < 1.0 brightens midtones) ─────────────────────
-    gamma_dusk: float = 0.95
-    gamma_night: float = 0.80
-    gamma_extreme: float = 0.65
+    # ── Gamma correction ──────────────────────────────────────────────────────
+    # Standard convention: out = (in/255) ** (1/gamma) * 255, so gamma > 1.0
+    # brightens midtones and gamma == 1.0 is a no-op. Values are deliberately
+    # modest — over-gamma washes out the very edge contrast YOLO keys on.
+    gamma_dusk: float = 1.10
+    gamma_night: float = 1.35
+    gamma_extreme: float = 1.75
 
     # ── Denoising ─────────────────────────────────────────────────────────────
     # Amplifying a dark frame amplifies sensor noise with it, so denoising is
