@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -43,6 +43,13 @@ class VideoStatus(str, Enum):
     COMPLETED    = "COMPLETED"
     CANCELLED    = "CANCELLED"
     ERROR        = "ERROR"
+
+# Phase 1.4 (D3): Validated threat priority enum
+class ThreatPriority(str, Enum):
+    CRITICAL = "CRITICAL"
+    HIGH     = "HIGH"
+    MEDIUM   = "MEDIUM"
+    LOW      = "LOW"
 
 
 # ─── Shared Sub-Schemas ───────────────────────────────────────────────────────
@@ -203,6 +210,7 @@ class AlertCreate(BaseModel):
     threat_level:  ThreatLevel
     reason:        str
     confidence:    Optional[float] = None
+    confidence_kind: Optional[str] = None   # Phase 4.5 (D2): DETECTION | FACE_MATCH
     bbox:          Optional[BBoxSchema] = None
     snapshot_path: Optional[str]   = None
 
@@ -220,6 +228,7 @@ class AlertResponse(BaseModel):
     threat_level:  ThreatLevel
     reason:        str
     confidence:    Optional[float] = None
+    confidence_kind: Optional[str] = None   # Phase 4.5 (D2)
     bbox:          Optional[BBoxSchema] = None
     status:        AlertStatus
     snapshot_path: Optional[str]   = None
@@ -299,19 +308,22 @@ class WatchlistPersonCreate(BaseModel):
     name:            str
     identifier:      Optional[str] = None
     notes:           Optional[str] = None
-    threat_priority: Optional[str] = "HIGH"
+    # Phase 1.4 (D3): Validated threat priority
+    threat_priority: Optional[ThreatPriority] = ThreatPriority.HIGH
     is_active:       Optional[bool] = True
 
 class WatchlistPersonUpdate(BaseModel):
     name:            Optional[str] = None
     identifier:      Optional[str] = None
     notes:           Optional[str] = None
-    threat_priority: Optional[str] = None
+    # Phase 1.4 (D3): Validated threat priority
+    threat_priority: Optional[ThreatPriority] = None
     is_active:       Optional[bool] = None
 
 class FaceEmbeddingResponse(BaseModel):
     id:         str
     person_id:  str
+    photo_path: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -324,11 +336,34 @@ class WatchlistPersonResponse(BaseModel):
     threat_priority: str
     is_active:       bool
     photo_path:      Optional[str] = None
+    original_filename: Optional[str] = None
     embeddings_count: int = 0
     created_at:      datetime
     updated_at:      datetime
 
     model_config = {"from_attributes": True}
+
+# Phase 3.1: Photo gallery response
+class PhotoGalleryItem(BaseModel):
+    embedding_id:  str
+    photo_path:    Optional[str] = None
+    quality_score: Optional[float] = None
+    created_at:    datetime
+
+class PersonPhotoGalleryResponse(BaseModel):
+    person_id:     str
+    person_name:   str
+    primary_photo: Optional[str] = None
+    photos:        List[PhotoGalleryItem] = []
+
+class FaceMatchCandidate(BaseModel):
+    person_id:     str
+    name:          Optional[str] = None
+    identifier:    Optional[str] = None
+    threat_priority: Optional[str] = None
+    cosine_score:  float = 0.0
+    similarity:    float = 0.0
+    calibrated_confidence: float = 0.0
 
 class FaceMatchResult(BaseModel):
     is_match:     bool
@@ -337,7 +372,9 @@ class FaceMatchResult(BaseModel):
     identifier:   Optional[str]   = None
     similarity:   float           = 0.0 # 0.0 - 100.0%
     cosine_score: float           = 0.0
+    calibrated_confidence: float  = 0.0
     threat_level: Optional[str]   = None
+    top_candidates: List[FaceMatchCandidate] = []
 
 class TestFaceMatchResponse(BaseModel):
     face_detected: bool
@@ -346,8 +383,51 @@ class TestFaceMatchResponse(BaseModel):
     person_name:   Optional[str]   = None
     similarity:    float           = 0.0
     cosine_score:  float           = 0.0
+    calibrated_confidence: float   = 0.0
     threshold_used: float          = 0.45
     message:       str
+    top_candidates: List[FaceMatchCandidate] = []
+
+# Phase 1.3: Face recognition event schemas
+class FaceRecognitionEventResponse(BaseModel):
+    id:           str
+    person_id:    Optional[str]   = None
+    person_name:  Optional[str]   = None
+    camera_id:    str
+    video_id:     Optional[str]   = None
+    track_id:     Optional[int]   = None
+    similarity:   float
+    cosine_score: float
+    event_type:   str
+    snapshot_path: Optional[str]  = None
+    timestamp:    datetime
+
+    model_config = {"from_attributes": True}
+
+# Phase 2.1: Watchlist embeddings for pipeline sync
+class WatchlistEmbeddingRecord(BaseModel):
+    person_id:      str
+    name:           str
+    identifier:     Optional[str] = None
+    threat_priority: str
+    embedding:      List[float]
+
+class WatchlistEmbeddingsResponse(BaseModel):
+    version:  int
+    records:  List[WatchlistEmbeddingRecord]
+
+# Phase 5.3: Audit log schemas
+class WatchlistAuditLogResponse(BaseModel):
+    id:            str
+    actor:         str
+    action:        str
+    person_id:     Optional[str] = None
+    person_name:   Optional[str] = None
+    justification: Optional[str] = None
+    details:       Optional[str] = None
+    timestamp:     datetime
+
+    model_config = {"from_attributes": True}
 
 
 # ─── ANPR Schemas ─────────────────────────────────────────────────────────────
@@ -389,6 +469,3 @@ class TestANPRResponse(BaseModel):
     plate_status:     str
     cleaned_text:     Optional[str]   = None
     message:          str
-
-
-

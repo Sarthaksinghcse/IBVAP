@@ -305,6 +305,7 @@ class ThreatEngine:
 
         return False
 
+    # CALLED FROM: pipeline.py (Phase 2), videos.py (Phase 4.3)
     def trigger_watchlist_alert(
         self,
         person_id: str,
@@ -324,7 +325,8 @@ class ThreatEngine:
         """
         current_time = time.time()
         dedup_key = f"watchlist:{person_id}:{track_id}" if track_id is not None else f"watchlist:{person_id}"
-        last_alert = self.last_alert_times.get(hash(dedup_key), 0.0)
+        # Phase 1.5 (I3): Key on string directly — hash() discards information
+        last_alert = self.last_alert_times.get(dedup_key, 0.0)
 
         if (current_time - last_alert) < self.alert_cooldown_seconds:
             # Suppress duplicate alert within cooldown window
@@ -388,7 +390,7 @@ class ThreatEngine:
         else:
             self.post_alert(alert_payload)
 
-        self.last_alert_times[hash(dedup_key)] = current_time
+        self.last_alert_times[dedup_key] = current_time
         logger.warning(f"[ThreatEngine] Fired WATCHLIST_MATCH Alert for {person_name} at {self.camera_id} ({threat_level})")
         return True
 

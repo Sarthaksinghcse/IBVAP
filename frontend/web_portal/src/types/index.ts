@@ -67,9 +67,59 @@ export interface WatchlistPerson {
   threat_priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
   is_active: boolean;
   photo_path?: string | null;
+  original_filename?: string | null;
   embeddings_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface PhotoGalleryItem {
+  embedding_id: string;
+  photo_path?: string | null;
+  quality_score?: number | null;
+  created_at: string;
+}
+
+export interface PersonPhotoGalleryResponse {
+  person_id: string;
+  person_name: string;
+  primary_photo?: string | null;
+  photos: PhotoGalleryItem[];
+}
+
+export interface FaceMatchCandidate {
+  person_id: string;
+  name?: string | null;
+  identifier?: string | null;
+  threat_priority?: string | null;
+  cosine_score: number;
+  similarity: number;
+  calibrated_confidence: number;
+}
+
+export interface FaceRecognitionEventResponse {
+  id: string;
+  person_id?: string | null;
+  person_name?: string | null;
+  camera_id: string;
+  video_id?: string | null;
+  track_id?: number | null;
+  similarity: number;
+  cosine_score: number;
+  event_type: string;
+  snapshot_path?: string | null;
+  timestamp: string;
+}
+
+export interface WatchlistAuditLogResponse {
+  id: string;
+  actor: string;
+  action: string;
+  person_id?: string | null;
+  person_name?: string | null;
+  justification?: string | null;
+  details?: string | null;
+  timestamp: string;
 }
 
 export interface TestFaceMatchResult {
@@ -79,8 +129,10 @@ export interface TestFaceMatchResult {
   person_name?: string;
   similarity: number;
   cosine_score: number;
+  calibrated_confidence: number;
   threshold_used: number;
   message: string;
+  top_candidates: FaceMatchCandidate[];
 }
 
 // ─── Data Models ─────────────────────────────────────────────────────────────
@@ -151,6 +203,7 @@ export interface Alert {
   threat_level: ThreatLevel;
   reason: string;
   confidence?: number;
+  confidence_kind?: string;
   bbox?: BoundingBox;
   status: AlertStatus;
   snapshot_path?: string;

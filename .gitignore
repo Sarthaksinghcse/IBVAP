@@ -1,31 +1,61 @@
-venv/
-.venv/
-node_modules/
-*/node_modules/
-.pip_cache/
-*.db
-storage/
-runs/
-datasets/
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*$py.class
 
-# Build outputs & packaging
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Pip cache and package installs
+.pip_cache/
+pip-wheel-metadata/
+
+# Node / Frontend
+node_modules/
+*/node_modules/
 dist/
 */dist/
 frontend/desktop/dist/
 frontend/web_portal/dist/
-
-# Logs & temp files
-*.log
+.npm
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Model runs & datasets
+runs/
+datasets/
+
+# Runtime data & temp files
 .tmp/
 tmp/
+*.log
+*.db-shm
+*.db-wal
+storage/videos/*
+!storage/videos/.gitkeep
+storage/snapshots/*
+!storage/snapshots/.gitkeep
+storage/watchlist/*
+!storage/watchlist/.gitkeep
 
-# OS & IDE
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Operating System files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# IDE & Editor files
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace

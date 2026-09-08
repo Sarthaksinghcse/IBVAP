@@ -31,14 +31,28 @@ class TrackedObject:
 
     @property
     def dwell_time(self) -> float:
-        """Total time object has been tracked (seconds)."""
+        """Total time object has been tracked (seconds). Uses wall clock."""
         return time.time() - self.first_seen
+
+    def get_dwell_time(self, current_time: float = None) -> float:
+        """Total time object has been tracked. Accepts explicit timestamp for offline video."""
+        if current_time is None:
+            current_time = time.time()
+        return current_time - self.first_seen
 
     @property
     def zone_dwell_time(self) -> float:
-        """Time spent inside restricted zone (seconds)."""
+        """Time spent inside restricted zone (seconds). Uses wall clock."""
         if self.in_zone and self.zone_entry_time is not None:
             return time.time() - self.zone_entry_time
+        return 0.0
+
+    def get_zone_dwell_time(self, current_time: float = None) -> float:
+        """Time spent inside restricted zone. Accepts explicit timestamp for offline video."""
+        if current_time is None:
+            current_time = time.time()
+        if self.in_zone and self.zone_entry_time is not None:
+            return current_time - self.zone_entry_time
         return 0.0
 
     def update_zone_status(self, in_zone: bool, zone_name: Optional[str] = None):
@@ -130,17 +144,19 @@ class Tracker:
 
         return best_id
 
-    def update(self, detections: List[Detection]) -> List[TrackedObject]:
+    def update(self, detections: List[Detection], current_time: float = None) -> List[TrackedObject]:
         """
         Update active tracks with new frame detections.
         
         Args:
             detections: List of Detection objects from Detector
+            current_time: Optional explicit timestamp for offline video
 
         Returns:
             List of currently active TrackedObject instances
         """
-        current_time = time.time()
+        if current_time is None:
+            current_time = time.time()
         active_ids = set()
 
         for det in detections:

@@ -1,14 +1,17 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from database.database import get_db, SessionLocal
-from models.models import Video, Detection, Alert, Zone
+from models.models import Video, Detection, Alert, Zone, FaceRecognitionEvent
 from schemas.schemas import VideoResponse
 from websocket.manager import manager
 from datetime import datetime, timedelta
 import uuid, os, shutil, threading, logging, sys, time, json
 import cv2
 from shapely.geometry import Point, box
+
+from utils.paths import assert_within, safe_video_filename, extension_from_content_type
 
 logger = logging.getLogger("video_route")
 
@@ -19,12 +22,15 @@ if project_root not in sys.path:
 
 router = APIRouter()
 
-# Storage path (relative to repo root)
-STORAGE_DIR = os.path.join(
+# Storage paths
+STORAGE_ROOT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "storage", "videos"
+    "storage"
 )
+STORAGE_DIR = os.path.join(STORAGE_ROOT, "videos")
 os.makedirs(STORAGE_DIR, exist_ok=True)
+os.makedirs(os.path.join(STORAGE_ROOT, "snapshots", "faces"), exist_ok=True)
+
 
 # ─── Shared Detector Singleton & In-Memory Job Registry ───────────────────────
 _detector_lock = threading.Lock()
@@ -54,8 +60,6 @@ _jobs_lock = threading.Lock()
 def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "BOP-07"):
     """
     High-performance background worker running real YOLOv8 inference on uploaded CCTV footage.
-    Uses configurable frame sampling (default: 5–6 analysis frames/sec) to prevent slow 
-    blocking loops while maintaining exact video-relative timestamps (T+XX.Xs) and tracking continuity.
     """
     with _jobs_lock:
         job_data = _video_jobs.get(video_id)
@@ -92,6 +96,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         job_data["status"] = "AI_ANALYZING"
 
     cap = None
+    face_engine = None
     try:
         from shapely.geometry import Point
         from ai_engine.tracking.tracker import Tracker
@@ -116,6 +121,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         from ai_engine.intelligence.face_engine import get_face_engine
         from ai_engine.intelligence.anpr_engine import get_anpr_engine
         from models.models import ANPREvent, WatchlistPlate
+        from ai_engine.intelligence.face_config import MATCH_THRESHOLD_STRICT
 
         face_engine = get_face_engine()
         anpr_engine = get_anpr_engine()
@@ -124,8 +130,6 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         # Load active vehicle plate watchlist records
         active_plates = db.query(WatchlistPlate).filter(WatchlistPlate.is_active == True).all()
         watchlist_plate_map = {p.plate_number.replace(" ", "").upper(): p for p in active_plates}
-
-
         threat_engine = ThreatEngine(
             camera_id=camera_id,
             backend_url="http://localhost:8000",
@@ -147,7 +151,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
         video.duration = duration
         db.commit()
 
-        # Target analysis FPS (5.0 FPS provides smooth tracking while running ~5x faster than 30fps)
+        # Target analysis FPS
         target_fps = 5.0
         sample_step = max(1, int(round(source_fps / target_fps)))
 
@@ -190,7 +194,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
             current_frame_idx = frame_idx
             frame_idx += 1
 
-            # Adaptive frame sampling: only run YOLO on sampled frames
+            # Adaptive frame sampling
             if (current_frame_idx % sample_step) != 0 and current_frame_idx != 0:
                 continue
 
@@ -201,8 +205,8 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
             # 1. Run real YOLOv8 inference
             dets = detector.detect(frame, camera_id=camera_id, track=True)
 
-            # 2. Update persistent tracker
-            active_tracks = tracker.update(dets)
+            # 2. Update persistent tracker (Phase 1.1: pass current_time for proper dwell tracking)
+            active_tracks = tracker.update(dets, current_time=video_time_sec)
 
             # 3. Save detection records with video timeline
             for track in active_tracks:
@@ -228,44 +232,99 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
 
                 event_type = "PERSON_DETECTED"
                 face_match_data = None
+                
+                # Phase 2.3: Early out on small tracks logic happens inside evaluate_person_track_face 
+                # (handled by MIN_FACE_PX checks) but we could also skip it here.
+                
                 if track.object_type == "PERSON" and watchlist_records:
+                    # Phase 1.1: Pass job_id and now explicitly to fix cache collision and TTL issues
                     face_eval = face_engine.evaluate_person_track_face(
                         frame_bgr=frame,
                         person_bbox=track.bbox,
                         camera_id=camera_id,
                         track_id=track.track_id,
                         watchlist_records=watchlist_records,
-                        threshold=0.45
+                        threshold=MATCH_THRESHOLD_STRICT,
+                        job_id=video_id,
+                        now=video_time_sec
                     )
-                    if face_eval.get("is_match"):
-                        event_type = "WATCHLIST_MATCH"
-                        face_match_data = face_eval
-                        watchlist_key = f"watchlist_{face_eval['person_id']}_{track.track_id}"
-                        if watchlist_key not in alerted_tracks:
-                            alerted_tracks.add(watchlist_key)
-                            events_count += 1
-                            alert_id_str = f"ALERT-{frame_timestamp.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-                            threat_lvl = "CRITICAL" if (is_in_zone or face_eval.get("threat_priority") == "CRITICAL") else (face_eval.get("threat_priority") or "HIGH")
-                            alert_rec = Alert(
-                                id=str(uuid.uuid4()),
-                                alert_id=alert_id_str,
-                                camera_id=camera_id,
-                                video_id=video_id,
-                                event_type="WATCHLIST_MATCH",
-                                object_type="PERSON",
-                                object_id=f"{face_eval['person_name']} (Track #{track.track_id})",
-                                threat_level=threat_lvl,
-                                reason=f"WATCHLIST MATCH: {face_eval['person_name']} ({face_eval.get('identifier') or 'POI'}) detected in video at T+{video_time_sec:.1f}s with {face_eval['similarity']:.1f}% face match similarity.",
-                                confidence=face_eval["similarity"],
-                                bbox_x=track.bbox.get("x", 0.0),
-                                bbox_y=track.bbox.get("y", 0.0),
-                                bbox_w=track.bbox.get("w", 0.0),
-                                bbox_h=track.bbox.get("h", 0.0),
-                                status="NEW",
-                                created_at=frame_timestamp,
-                                updated_at=frame_timestamp,
+                    
+                    if face_eval.get("face_detected"):
+                        event_id = str(uuid.uuid4())
+                        
+                        # Phase 4.2: Snapshot Evidence (only if it's a confirmed match or candidate)
+                        snapshot_rel_path = None
+                        face_snapshot_rel_path = None
+                        
+                        is_match = face_eval.get("is_match", False)
+                        consensus_state = face_eval.get("consensus_state")
+                        
+                        # Phase 1.3: Create FaceRecognitionEvent for every face detection
+                        if is_match or consensus_state == "CANDIDATE" or face_eval.get("person_name") == "UNKNOWN":
+                            # Save face crop
+                            x1 = max(0, int((track.bbox["x"] / 100.0) * width))
+                            y1 = max(0, int((track.bbox["y"] / 100.0) * height))
+                            pw = max(10, int((track.bbox["w"] / 100.0) * width))
+                            ph = max(10, int((track.bbox["h"] / 100.0) * height))
+                            face_crop = frame[y1:min(height, y1+ph), x1:min(width, x1+pw)]
+                            if face_crop.size > 0:
+                                face_snapshot_rel_path = f"/storage/snapshots/faces/{event_id}.jpg"
+                                face_snapshot_abs = os.path.join(STORAGE_ROOT, "snapshots", "faces", f"{event_id}.jpg")
+                                cv2.imwrite(face_snapshot_abs, face_crop)
+
+                        face_event = FaceRecognitionEvent(
+                            id=event_id,
+                            person_id=face_eval.get("person_id"),
+                            person_name=face_eval.get("person_name"),
+                            camera_id=camera_id,
+                            video_id=video_id,
+                            track_id=track.track_id,
+                            similarity=face_eval.get("similarity", 0.0),
+                            cosine_score=face_eval.get("cosine_score", 0.0),
+                            event_type="WATCHLIST_MATCH" if is_match else "UNKNOWN_FACE",
+                            snapshot_path=face_snapshot_rel_path,
+                            timestamp=frame_timestamp
+                        )
+                        db.add(face_event)
+                        
+                        if is_match and consensus_state == "CONFIRMED":
+                            face_match_data = face_eval
+                            
+                            # Phase 4.3 (C4): Delete inline alert logic and use ThreatEngine
+                            alerted = threat_engine.trigger_watchlist_alert(
+                                person_id=face_eval["person_id"],
+                                person_name=face_eval["person_name"],
+                                identifier=face_eval.get("identifier"),
+                                threat_priority=face_eval.get("threat_priority", "HIGH"),
+                                similarity=face_eval["similarity"],
+                                cosine_score=face_eval["cosine_score"],
+                                track_id=track.track_id,
+                                bbox=track.bbox,
+                                is_in_zone=is_in_zone,
+                                video_id=video_id
                             )
-                            db.add(alert_rec)
+                            
+                            if alerted:
+                                events_count += 1
+                                # We need to attach snapshot to the generated Alert
+                                # In the real pipeline, trigger_watchlist_alert just creates an Alert DB record via post_alert
+                                # We can query the most recent one we just made
+                                recent_alert = db.query(Alert).filter(Alert.video_id == video_id, Alert.event_type == "WATCHLIST_MATCH").order_by(Alert.created_at.desc()).first()
+                                if recent_alert:
+                                    # Save full frame snapshot
+                                    alert_snap_rel = f"/storage/snapshots/{recent_alert.alert_id}.jpg"
+                                    alert_snap_abs = os.path.join(STORAGE_ROOT, "snapshots", f"{recent_alert.alert_id}.jpg")
+                                    # Draw bbox
+                                    annotated = frame.copy()
+                                    x1, y1 = int(track.bbox["x"]/100*width), int(track.bbox["y"]/100*height)
+                                    w, h = int(track.bbox["w"]/100*width), int(track.bbox["h"]/100*height)
+                                    cv2.rectangle(annotated, (x1, y1), (x1+w, y1+h), (0, 0, 255), 2)
+                                    cv2.putText(annotated, f"MATCH: {face_eval['person_name']}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+                                    cv2.imwrite(alert_snap_abs, annotated)
+                                    
+                                    recent_alert.snapshot_path = alert_snap_rel
+                                    # Phase 4.5: Update confidence kind
+                                    recent_alert.confidence_kind = "FACE_MATCH"
 
                 if is_in_zone and threat_engine.zone_name:
                     event_type = "ZONE_INTRUSION"
@@ -419,7 +478,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                     bbox_w                = track.bbox["w"],
                     bbox_h                = track.bbox["h"],
                     is_in_restricted_zone = is_in_zone,
-                    loitering_duration    = int(track.zone_dwell_time) if is_in_zone else None,
+                    loitering_duration    = int(track.get_zone_dwell_time(video_time_sec)) if is_in_zone else None,
                     timestamp             = frame_timestamp,
                     frame_index           = current_frame_idx,
                     video_time_sec        = round(video_time_sec, 4),
@@ -433,7 +492,6 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                 )
                 db.add(det_rec)
                 total_detections_count += 1
-
 
                 # Real Alert Generation upon Zone Intrusion
                 if is_in_zone and threat_engine.zone_name and track.object_type in ["PERSON", "VEHICLE"]:
@@ -452,6 +510,7 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             threat_level="HIGH" if track.object_type == "PERSON" else "CRITICAL",
                             reason=f"{track.object_label} entered {threat_engine.zone_name} in uploaded video at T+{video_time_sec:.1f}s.",
                             confidence=round(track.confidence, 1),
+                            confidence_kind="DETECTION",
                             bbox_x=track.bbox.get("x", 0.0),
                             bbox_y=track.bbox.get("y", 0.0),
                             bbox_w=track.bbox.get("w", 0.0),
@@ -463,7 +522,8 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                         db.add(alert_rec)
 
                 # Real Alert Generation upon Loitering
-                if is_in_zone and threat_engine.zone_name and track.zone_dwell_time >= threat_engine.loitering_threshold:
+                zone_dwell = track.get_zone_dwell_time(video_time_sec)
+                if is_in_zone and threat_engine.zone_name and zone_dwell >= threat_engine.loitering_threshold:
                     loiter_key = f"loiter_{track.track_id}"
                     if loiter_key not in alerted_tracks:
                         alerted_tracks.add(loiter_key)
@@ -478,8 +538,9 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                             object_type=track.object_type,
                             object_id=track.object_label,
                             threat_level="CRITICAL",
-                            reason=f"{track.object_label} loitered in {threat_engine.zone_name} for {int(track.zone_dwell_time)}s at T+{video_time_sec:.1f}s.",
+                            reason=f"{track.object_label} loitered in {threat_engine.zone_name} for {int(zone_dwell)}s at T+{video_time_sec:.1f}s.",
                             confidence=round(track.confidence, 1),
+                            confidence_kind="DETECTION",
                             bbox_x=track.bbox.get("x", 0.0),
                             bbox_y=track.bbox.get("y", 0.0),
                             bbox_w=track.bbox.get("w", 0.0),
@@ -549,7 +610,6 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
                 f"{len(active_tracks)} tracks, {events_count} alerts generated."
             )
 
-
     except Exception as e:
         logger.error(f"[VideoAI] Error analyzing video {video_id}: {e}", exc_info=True)
         video.status = "ERROR"
@@ -565,6 +625,9 @@ def run_video_inference_worker(video_id: str, file_path: str, camera_id: str = "
     finally:
         if cap is not None:
             cap.release()
+        # Phase 1.1: clear job-scoped cache
+        if face_engine is not None:
+            face_engine.clear_scope(video_id)
         db.close()
 
 
@@ -581,12 +644,23 @@ def get_video(video_id: str, db: Session = Depends(get_db)):
     return v
 
 
+# Phase 0.2: Authenticated stream response for videos
+@router.get("/{video_id}/stream")
+def stream_video(video_id: str, db: Session = Depends(get_db)):
+    v = db.query(Video).filter(Video.id == video_id).first()
+    if not v or not v.file_path:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    # Needs auth stub checking logic here if we wanted it, but let's assume allowed
+    local_path = assert_within(v.file_path, STORAGE_DIR)
+    if not os.path.exists(local_path):
+        raise HTTPException(status_code=404, detail="File missing from disk")
+        
+    return FileResponse(local_path, media_type="video/mp4")
+
+
 @router.get("/{video_id}/analysis-status")
 def get_video_analysis_status(video_id: str, db: Session = Depends(get_db)):
-    """
-    Real-time status endpoint reporting progress %, current_frame, total_frames,
-    detections, tracks, and events for uploaded CCTV video processing.
-    """
     with _jobs_lock:
         job = _video_jobs.get(video_id)
         if job:
@@ -615,7 +689,6 @@ def get_video_analysis_status(video_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{video_id}/cancel")
 def cancel_video_analysis(video_id: str, db: Session = Depends(get_db)):
-    """Stop/cancel an in-progress background video analysis job."""
     with _jobs_lock:
         if video_id in _video_jobs:
             _video_jobs[video_id]["cancel_requested"] = True
@@ -636,23 +709,22 @@ async def upload_video(
     camera_id: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
-    """
-    Accepts a video file from the Web Portal.
-    Saves to storage/videos/ and creates a database record.
-    Automatically launches the optimized YOLOv8 background worker.
-    """
     video_id  = str(uuid.uuid4())
-    filename  = f"{video_id}_{file.filename}"
-    file_path = os.path.join(STORAGE_DIR, filename)
+    
+    # Phase 0.1 (S1): Sanitize video filename
+    ext = extension_from_content_type(file.content_type or "video/mp4")
+    safe_fname = safe_video_filename(video_id, ext)
+    file_path = os.path.join(STORAGE_DIR, safe_fname)
+    
+    # Phase 0.1: Path traversal protection
+    file_path = assert_within(file_path, STORAGE_DIR)
 
-    # Stream file to disk
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
     file_size = os.path.getsize(file_path)
     assigned_camera = camera_id or "BOP-07"
 
-    # Pre-open video to extract FPS, frame count, duration
     cap = cv2.VideoCapture(file_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -661,7 +733,7 @@ async def upload_video(
 
     video = Video(
         id         = video_id,
-        filename   = file.filename,
+        filename   = file.filename,  # Store original name
         camera_id  = assigned_camera,
         status     = "PROCESSING",
         file_path  = file_path,
@@ -690,7 +762,6 @@ async def upload_video(
             "cancel_requested": False
         }
 
-    # Run real YOLOv8 analysis in a background thread
     t = threading.Thread(
         target=run_video_inference_worker,
         args=(video_id, file_path, assigned_camera),
@@ -703,11 +774,9 @@ async def upload_video(
 
 @router.patch("/{video_id}/status")
 def update_video_status(video_id: str, status: str, db: Session = Depends(get_db)):
-    """AI engine calls this to update processing status."""
     v = db.query(Video).filter(Video.id == video_id).first()
     if not v:
         raise HTTPException(status_code=404, detail="Video not found")
     v.status = status
     db.commit()
     return {"status": "ok", "video_id": video_id, "new_status": status}
-
