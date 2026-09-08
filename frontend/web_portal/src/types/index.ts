@@ -246,6 +246,7 @@ export interface AppSettings {
   showConfidence: boolean;
   alertSound: boolean;
   voiceAlerts: boolean;
+  personBeep?: boolean;
   autoAcknowledge: boolean;
   aiThreshold: number;
   loiteringThreshold: number;

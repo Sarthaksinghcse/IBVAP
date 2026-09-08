@@ -7,6 +7,7 @@ import { AddCameraModal } from '../cameras/AddCameraModal';
 import { MultiCameraGrid } from './MultiCameraGrid';
 import * as api from '../../services/api';
 import type { Detection, Zone } from '../../types';
+import { playPersonDetectedBeep } from '../../utils/audio';
 
 
 
@@ -356,6 +357,12 @@ export function CCTVPanel() {
           setActiveFrameDetections(filtered);
           setActiveTracksForSource('WEBCAM-01', filtered);
 
+          // Acoustic Beep on person detection
+          const hasPerson = filtered.some((d) => d.object_type === 'PERSON');
+          if (hasPerson && (settings.personBeep ?? true)) {
+            playPersonDetectedBeep();
+          }
+
           // Push significant events into store using addDetection (append, not replace)
           const now = Date.now() / 1000;
           for (const det of filtered) {
@@ -409,6 +416,10 @@ export function CCTVPanel() {
       const liveDets = detections.filter((d) => d.camera_id === selectedCamId && !d.video_id).slice(0, 5);
       setActiveFrameDetections(liveDets);
       if (selectedCamId) setActiveTracksForSource(selectedCamId, liveDets);
+      const hasPerson = liveDets.some((d) => d.object_type === 'PERSON');
+      if (hasPerson && (settings.personBeep ?? true)) {
+        playPersonDetectedBeep();
+      }
       return;
     }
 
@@ -442,6 +453,12 @@ export function CCTVPanel() {
           setActiveFrameDetections(filtered);
           if (activeVideoId) {
             setActiveTracksForSource(activeVideoId, filtered);
+          }
+
+          // Acoustic Beep on person detection during video playback
+          const hasPerson = filtered.some((d) => d.object_type === 'PERSON');
+          if (hasPerson && (settings.personBeep ?? true)) {
+            playPersonDetectedBeep();
           }
         }
       }

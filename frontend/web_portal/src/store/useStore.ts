@@ -17,6 +17,7 @@ export interface AppSettings {
   showConfidence: boolean;
   alertSound: boolean;
   voiceAlerts: boolean;
+  personBeep?: boolean;
   autoAcknowledge: boolean;
   aiThreshold: number;
   loiteringThreshold: number;
@@ -35,6 +36,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showConfidence: true,
   alertSound: true,
   voiceAlerts: true,
+  personBeep: true,
   autoAcknowledge: false,
   aiThreshold: 50,
   loiteringThreshold: 15,

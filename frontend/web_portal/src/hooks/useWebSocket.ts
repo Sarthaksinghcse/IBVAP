@@ -4,7 +4,7 @@ import { wsService } from '../services/websocket';
 import { MockAIEngine } from '../services/mock/mockEngine';
 import * as api from '../services/api';
 import type { WSMessage } from '../types';
-import { playAlertChime, announceVoiceAlert } from '../utils/audio';
+import { playAlertChime, announceVoiceAlert, playPersonDetectedBeep } from '../utils/audio';
 
 
 /**
@@ -65,6 +65,12 @@ export function useWebSocket() {
             }
           }
 
+          // Person detection acoustic alert
+          const isPersonAlert = alertData.object_type === 'PERSON';
+          if (isPersonAlert && (currentSettings.personBeep ?? true)) {
+            playPersonDetectedBeep();
+          }
+
           // Auto-Acknowledge Low Alerts setting
           if (alertData.threat_level === 'LOW' && currentSettings.autoAcknowledge && alertData.id) {
             api.patchAlert(alertData.id, 'ACKNOWLEDGED').then(() => {
@@ -81,9 +87,16 @@ export function useWebSocket() {
             updateAlertStatus(msg.data.id, msg.data.status);
           }
           break;
-        case 'DETECTION':
-          addDetection(msg.data as Parameters<typeof addDetection>[0]);
+        case 'DETECTION': {
+          const det = msg.data as Parameters<typeof addDetection>[0];
+          addDetection(det);
+          const currentSettings = useStore.getState().settings;
+          const isPerson = det.object_type === 'PERSON';
+          if (isPerson && (currentSettings.personBeep ?? true)) {
+            playPersonDetectedBeep();
+          }
           break;
+        }
         case 'SYSTEM':
           setSystemStatus(msg.data as Parameters<typeof setSystemStatus>[0]);
           break;
