@@ -760,8 +760,11 @@ export const getActiveCamerasCount = (
   activeCameraStream: MediaStream | null
 ): number => {
   const webcamConnected = isWebcamStreamConnected(isWebcamActive, activeCameraStream) ? 1 : 0;
+  // A PLAYBACK source serves a pre-analysed recording, so its AI loop is
+  // deliberately stopped. It is still an online feed delivering analysed video
+  // and belongs in this count.
   const onlineAiCctvCount = cameras.filter(
-    (c) => c.status === 'ONLINE' && c.ai_status === 'RUNNING'
+    (c) => c.status === 'ONLINE' && (c.ai_status === 'RUNNING' || c.source_type === 'PLAYBACK')
   ).length;
   return onlineAiCctvCount + webcamConnected;
 };

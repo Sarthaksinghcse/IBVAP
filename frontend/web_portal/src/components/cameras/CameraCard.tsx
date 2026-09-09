@@ -132,6 +132,8 @@ export function CameraCard({ camera, isSelected, onClick, onConfigureZone, onDel
               ? 'PHONE / WIFI'
               : sourceType === 'WEBCAM'
               ? 'LAPTOP WEBCAM'
+              : sourceType === 'PLAYBACK'
+              ? 'RECORDED FEED'
               : 'CCTV'}
           </span>
 
