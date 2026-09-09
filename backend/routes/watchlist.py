@@ -6,10 +6,12 @@ SFace 128-D embedding extraction, persistence in SQLite, and test matching.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
 import uuid
+import base64
 import cv2
 import numpy as np
 import json
@@ -24,23 +26,55 @@ from schemas.schemas import (
     TestFaceMatchResponse,
 )
 from ai_engine.intelligence.face_engine import get_face_engine
+from utils.paths import get_storage_root
 
 logger = logging.getLogger("watchlist_route")
 router = APIRouter()
 
-# Storage directory for watchlist target photos
-STORAGE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "storage", "watchlist"
-)
+# Unified storage directories
+STORAGE_ROOT = get_storage_root()
+STORAGE_DIR = os.path.join(STORAGE_ROOT, "watchlist")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 # Storage directory for face crops (outside public static mount)
-FACE_CROPS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "storage", "face_crops"
-)
+FACE_CROPS_DIR = os.path.join(STORAGE_ROOT, "face_crops")
 os.makedirs(FACE_CROPS_DIR, exist_ok=True)
+
+
+class WatchlistRegisterWebcamRequest(BaseModel):
+    name: str
+    identifier: Optional[str] = None
+    notes: Optional[str] = None
+    threat_priority: Optional[str] = "HIGH"
+    is_active: Optional[bool] = True
+    image_base64: str
+
+
+class TestFaceMatchWebcamRequest(BaseModel):
+    image_base64: str
+    threshold: Optional[float] = 0.45
+
+
+def _decode_base64_image(image_base64: str) -> np.ndarray:
+    """Decodes a base64 or data-URL encoded image string to OpenCV BGR numpy array."""
+    if not image_base64:
+        raise HTTPException(status_code=400, detail="Image data cannot be empty.")
+
+    if "," in image_base64:
+        image_base64 = image_base64.split(",", 1)[1]
+
+    try:
+        raw_bytes = base64.b64decode(image_base64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 image encoding.")
+
+    nparr = np.frombuffer(raw_bytes, np.uint8)
+    img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    if img_bgr is None or img_bgr.size == 0:
+        raise HTTPException(status_code=400, detail="Failed to decode image from camera capture.")
+
+    return img_bgr
 
 
 @router.get("/face-crops/{filename}")
@@ -393,6 +427,155 @@ async def test_face_match(
         similarity=sim_pct,
         cosine_score=cos_score,
         threshold_used=threshold or 0.45,
+        message=msg
+    )
+
+
+@router.post("/register-webcam", response_model=WatchlistPersonResponse)
+def register_watchlist_person_webcam(
+    data: WatchlistRegisterWebcamRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Registers a new person on the Watchlist directly from laptop webcam capture (base64):
+    1. Decodes base64 frame.
+    2. Pre-enhances for low light and runs YuNet face detection & SFace 128-D vector extraction.
+    3. Saves photo to storage/watchlist/{person_id[:8]}_webcam.jpg.
+    4. Persists person and embedding in SQLite database.
+    """
+    name_clean = data.name.strip()
+    if not name_clean:
+        raise HTTPException(status_code=400, detail="Person name cannot be empty.")
+
+    img_bgr = _decode_base64_image(data.image_base64)
+    face_engine = get_face_engine()
+
+    img_bgr = face_engine._apply_low_light_enhancement(img_bgr)
+    success, embedding, error_msg, quality_score = face_engine.process_registration_image(img_bgr)
+
+    if not success or embedding is None:
+        raise HTTPException(
+            status_code=400,
+            detail=error_msg or "No usable face detected. Please ensure good lighting and face the camera directly."
+        )
+
+    person_id = str(uuid.uuid4())
+    safe_filename = f"{person_id[:8]}_webcam.jpg"
+    file_path = os.path.join(STORAGE_DIR, safe_filename)
+    cv2.imwrite(file_path, img_bgr)
+
+    relative_photo_path = f"/storage/watchlist/{safe_filename}"
+    now = datetime.utcnow()
+
+    person = WatchlistPerson(
+        id=person_id,
+        name=name_clean,
+        identifier=data.identifier.strip() if data.identifier else None,
+        notes=data.notes.strip() if data.notes else None,
+        threat_priority=data.threat_priority.upper() if data.threat_priority else "HIGH",
+        is_active=data.is_active if data.is_active is not None else True,
+        photo_path=relative_photo_path,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(person)
+    db.flush()
+
+    emb_rec = FaceEmbedding(
+        id=str(uuid.uuid4()),
+        person_id=person.id,
+        embedding_json=json.dumps(embedding.tolist()),
+        created_at=now,
+    )
+    db.add(emb_rec)
+    db.commit()
+    db.refresh(person)
+
+    logger.info(f"[Watchlist] Successfully registered target via webcam: {person.name} ({person.id})")
+    face_engine.clear_cache()
+    _increment_version()
+
+    return WatchlistPersonResponse(
+        id=person.id,
+        name=person.name,
+        identifier=person.identifier,
+        notes=person.notes,
+        threat_priority=person.threat_priority,
+        is_active=person.is_active,
+        photo_path=person.photo_path,
+        embeddings_count=1,
+        created_at=person.created_at,
+        updated_at=person.updated_at,
+    )
+
+
+@router.post("/test-match-webcam", response_model=TestFaceMatchResponse)
+def test_face_match_webcam(
+    data: TestFaceMatchWebcamRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Evaluates a live webcam probe frame (base64) directly against active watchlist targets.
+    Returns real similarity percentage, cosine score, and matched identity.
+    """
+    img_bgr = _decode_base64_image(data.image_base64)
+    face_engine = get_face_engine()
+
+    img_bgr = face_engine._apply_low_light_enhancement(img_bgr)
+
+    face = face_engine.detect_primary_face(img_bgr, score_threshold=0.45)
+    if face is None:
+        face = face_engine.detect_primary_face(img_bgr, score_threshold=0.35)
+    if face is None:
+        return TestFaceMatchResponse(
+            face_detected=False,
+            match_found=False,
+            similarity=0.0,
+            cosine_score=0.0,
+            threshold_used=data.threshold or 0.45,
+            message="No face detected in live webcam frame. Please look directly into the camera."
+        )
+
+    embedding = face_engine.extract_embedding(img_bgr, face)
+    if embedding is None:
+        return TestFaceMatchResponse(
+            face_detected=True,
+            match_found=False,
+            similarity=0.0,
+            cosine_score=0.0,
+            threshold_used=data.threshold or 0.45,
+            message="Face detected but failed to extract 128-D biometric signature."
+        )
+
+    watchlist_records = _load_active_watchlist_records(db)
+    if not watchlist_records:
+        return TestFaceMatchResponse(
+            face_detected=True,
+            match_found=False,
+            similarity=0.0,
+            cosine_score=0.0,
+            threshold_used=data.threshold or 0.45,
+            message="Face detected. No active targets registered in Watchlist database."
+        )
+
+    is_match, pid, pname, ident, priority, sim_pct, cos_score, top_candidates = face_engine.match_against_watchlist(
+        embedding, watchlist_records, threshold=data.threshold or 0.45
+    )
+
+    if is_match:
+        msg = f"MATCH CONFIRMED: {pname} ({ident or 'ID: ' + pid[:8]}) with {sim_pct}% similarity (cosine: {cos_score:.4f})."
+    else:
+        best_cand = top_candidates[0]['name'] if top_candidates else 'None'
+        msg = f"UNKNOWN FACE: Best similarity was {sim_pct}% with '{best_cand}' (cosine: {cos_score:.4f}, threshold: {data.threshold or 0.45})."
+
+    return TestFaceMatchResponse(
+        face_detected=True,
+        match_found=is_match,
+        person_id=pid,
+        person_name=pname,
+        similarity=sim_pct,
+        cosine_score=cos_score,
+        threshold_used=data.threshold or 0.45,
         message=msg
     )
 

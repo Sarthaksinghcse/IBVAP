@@ -48,7 +48,7 @@ class MockAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/api/watchlist") and request.method in ["POST", "PUT", "PATCH", "DELETE"]:
             # Test-match is safe for non-admins if needed, but registry mutations require admin
             if role != "admin":
-                if not request.url.path.endswith("/test-match"):
+                if not ("/test-match" in request.url.path):
                     return JSONResponse(
                         status_code=403,
                         content={"detail": "Admin privileges required to modify the biometric registry."}

@@ -228,7 +228,9 @@ import type {
   TestFaceMatchResult,
   PersonPhotoGalleryResponse,
   FaceRecognitionEventResponse,
-  WatchlistAuditLogResponse
+  WatchlistAuditLogResponse,
+  WatchlistRegisterWebcamPayload,
+  WatchlistTestMatchWebcamPayload
 } from '../types';
 
 export const getWatchlist = (): Promise<WatchlistPerson[]> =>
@@ -243,6 +245,11 @@ export const registerWatchlistPerson = (formData: FormData): Promise<WatchlistPe
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
+
+export const registerWatchlistPersonWebcam = (
+  data: WatchlistRegisterWebcamPayload
+): Promise<WatchlistPerson> =>
+  client.post<WatchlistPerson>('/api/watchlist/register-webcam', data).then((r) => r.data);
 
 export const addWatchlistPhoto = (personId: string, formData: FormData): Promise<any> =>
   client
@@ -269,6 +276,11 @@ export const testFaceMatch = (formData: FormData): Promise<TestFaceMatchResult> 
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
+
+export const testFaceMatchWebcam = (
+  data: WatchlistTestMatchWebcamPayload
+): Promise<TestFaceMatchResult> =>
+  client.post<TestFaceMatchResult>('/api/watchlist/test-match-webcam', data).then((r) => r.data);
 
 export const getFaceEvents = (params?: { person_id?: string; camera_id?: string; event_type?: string; limit?: number }): Promise<FaceRecognitionEventResponse[]> =>
   client.get<FaceRecognitionEventResponse[]>('/api/watchlist/events', { params }).then((r) => r.data);

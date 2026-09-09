@@ -385,8 +385,16 @@ export interface LoginWebcamPayload {
   image_base64: string;
 }
 
+export interface WatchlistRegisterWebcamPayload {
+  name: string;
+  identifier?: string;
+  notes?: string;
+  threat_priority?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  is_active?: boolean;
+  image_base64: string;
+}
 
-
-
-
-
+export interface WatchlistTestMatchWebcamPayload {
+  image_base64: string;
+  threshold?: number;
+}
