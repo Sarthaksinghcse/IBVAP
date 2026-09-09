@@ -18,3 +18,6 @@ scratch/
 
 # Ultralytics auto-downloads weights into the CWD; models/ is the real home
 *.pt
+
+# electron-builder output (web_portal/dist is intentionally committed; this is not)
+frontend/desktop/dist/
