@@ -98,7 +98,9 @@ app.add_middleware(
 
 # ─── Static Files (uploaded videos + snapshots + watchlist photos) ───────────
 
-STORAGE_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage")
+from utils.paths import get_storage_root
+
+STORAGE_ROOT = get_storage_root()
 os.makedirs(os.path.join(STORAGE_ROOT, "videos"),    exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots", "faces"), exist_ok=True)

@@ -354,6 +354,29 @@ async function startBackend() {
     ? path.join(__dirname, '..', '..')
     : `${process.resourcesPath};${path.join(process.resourcesPath, 'backend')};${path.join(process.resourcesPath, '..', '..', '..', '..')}`;
 
+  // Resolve canonical persistent DB and Storage paths across dev and packaged modes
+  const projectRootCandidates = [
+    'C:\\Users\\thaku\\OneDrive\\Desktop\\IBVAP',
+    path.join(__dirname, '..', '..'),
+    path.join(process.resourcesPath, '..', '..', '..', '..'),
+  ];
+  let canonicalDb = null;
+  let canonicalStorage = null;
+  for (const pr of projectRootCandidates) {
+    const candidateDb = path.join(pr, 'backend', 'ibvap.db');
+    const candidateStorage = path.join(pr, 'storage');
+    if (fs.existsSync(candidateDb) || fs.existsSync(candidateStorage)) {
+      canonicalDb = candidateDb;
+      canonicalStorage = candidateStorage;
+      break;
+    }
+  }
+
+  const resolvedDbPath = canonicalDb || path.join(BACKEND_DIR, 'ibvap.db');
+  const resolvedStoragePath = canonicalStorage || STORAGE_DIR;
+  console.log(`[IBVAP] Binding persistent DB: ${resolvedDbPath}`);
+  console.log(`[IBVAP] Binding persistent Storage: ${resolvedStoragePath}`);
+
   // Spawn uvicorn
   backendProcess = spawn(
     pythonCmd,
@@ -362,6 +385,8 @@ async function startBackend() {
       cwd: BACKEND_DIR,
       env: {
         ...process.env,
+        IBVAP_DB_PATH: resolvedDbPath,
+        IBVAP_STORAGE_ROOT: resolvedStoragePath,
         PYTHONDONTWRITEBYTECODE: '1',
         PYTHONPATH: pythonPath,
       },
@@ -503,14 +528,19 @@ function setupIPC() {
 
 function startAlertsSync() {
   const wsUrl = `ws://127.0.0.1:${BACKEND_PORT}/ws/alerts`;
+  const WSClient = globalThis.WebSocket || (typeof WebSocket !== 'undefined' ? WebSocket : null);
   let ws = null;
   let reconnectTimer = null;
+
+  if (!WSClient) {
+    console.warn('[IBVAP] Global WebSocket is not available in Electron environment. Realtime alert sync disabled.');
+    return;
+  }
 
   function connect() {
     if (isQuitting) return;
     try {
-      if (typeof WebSocket === 'undefined') return;
-      ws = new WebSocket(wsUrl);
+      ws = new WSClient(wsUrl);
 
       ws.onopen = () => {
         console.log('[IBVAP] Connected to alerts WebSocket for Supabase cloud sync');
@@ -522,32 +552,48 @@ function startAlertsSync() {
           if (payload.type === 'ALERT' && payload.data) {
             const a = payload.data;
             const eventType = String(a.event_type || '').toUpperCase();
+            const imageName = a.snapshot_path ? path.basename(a.snapshot_path) : undefined;
+            const alertId = a.alert_id || a.id;
+            const severity = a.threat_level || 'CRITICAL';
+
+            console.log(`[IBVAP] 🚨 AI Alert received: ${alertId} (${eventType}) -> Forwarding to Supabase...`);
+
             if (eventType.includes('ZONE') || eventType.includes('BREACH') || eventType.includes('INTRUSION')) {
               await reportZoneBreach({
+                id: alertId,
                 cameraId: a.camera_id,
                 objectType: a.object_type,
                 objectId: a.object_id,
                 confidence: a.confidence,
                 movementAnalysis: a.reason,
+                imageName,
+                severity,
                 latitude: a.latitude,
                 longitude: a.longitude,
               });
             } else if (eventType.includes('LOITER')) {
               await reportLoitering({
+                id: alertId,
                 cameraId: a.camera_id,
                 objectType: a.object_type,
                 objectId: a.object_id,
                 confidence: a.confidence,
                 movementAnalysis: a.reason,
+                imageName,
+                severity: severity || 'HIGH',
                 latitude: a.latitude,
                 longitude: a.longitude,
               });
             } else if (eventType.includes('FACE') || eventType.includes('WATCHLIST')) {
               await reportFaceMatch({
+                id: alertId,
                 cameraId: a.camera_id,
                 personName: a.object_id || a.reason,
+                objectId: a.object_id,
                 confidence: a.confidence,
                 movementAnalysis: a.reason,
+                imageName,
+                severity,
                 latitude: a.latitude,
                 longitude: a.longitude,
               });
