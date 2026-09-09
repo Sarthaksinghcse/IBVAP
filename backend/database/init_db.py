@@ -39,6 +39,9 @@ def _apply_schema_migrations():
         ("alerts",     "bbox_h",         "REAL"),
         ("detections", "session_id",     "TEXT"),
         ("alerts",     "session_id",     "TEXT"),
+        ("videos",     "enhanced_file_path", "TEXT"),
+        ("videos",     "is_low_light",       "BOOLEAN DEFAULT 0"),
+        ("videos",     "brightness",         "REAL"),
     ]
     with engine.connect() as conn:
         for table, col, coltype in migrations:

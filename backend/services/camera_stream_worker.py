@@ -33,6 +33,7 @@ from routes.alerts import create_and_broadcast_alert_sync
 from ai_engine.detection.detector import Detector, ALL_SUPPORTED_CLASSES
 from ai_engine.tracking.tracker import Tracker, TrackedObject
 from ai_engine.intelligence.threat_engine import ThreatEngine
+from ai_engine.preprocessing.frame_enhancer import FrameEnhancer
 
 logger = logging.getLogger("camera_worker")
 
@@ -45,7 +46,7 @@ def get_shared_detector() -> Detector:
     with _detector_lock:
         if _shared_detector is None:
             logger.info("[CameraWorker] Initializing shared YOLOv8n detector...")
-            _shared_detector = Detector(conf_threshold=0.45)
+            _shared_detector = Detector(conf_threshold=0.25)
         return _shared_detector
 
 
@@ -106,6 +107,11 @@ class CameraStreamWorker:
         self._last_viewer_time: float = time.time()
 
         # Camera-specific AI pipelines (persistent tracker & threat engine)
+        self.enhancer = FrameEnhancer()
+        self._latest_enhanced_frame: Optional[np.ndarray] = None
+        self._is_low_light: bool = False
+        self._current_brightness: float = 0.0
+        self._current_gamma: float = 1.0
         self.tracker = Tracker()
         self.threat_engine = ThreatEngine(
             camera_id=self.camera_id,
@@ -164,10 +170,12 @@ class CameraStreamWorker:
                 self.threat_engine.set_zone(coords, cam_zone.name)
                 logger.info(f"[CameraWorker] Loaded zone '{cam_zone.name}' for {self.camera_id}")
             else:
-                self.threat_engine.set_zone(None, None)
+                from ai_engine.intelligence.threat_engine import DEFAULT_RESTRICTED_ZONE_A
+                self.threat_engine.set_zone(DEFAULT_RESTRICTED_ZONE_A, "Restricted Zone A")
         except Exception as e:
             logger.warning(f"[CameraWorker] Error loading zone/rotation for {self.camera_id}: {e}")
-            self.threat_engine.set_zone(None, None)
+            from ai_engine.intelligence.threat_engine import DEFAULT_RESTRICTED_ZONE_A
+            self.threat_engine.set_zone(DEFAULT_RESTRICTED_ZONE_A, "Restricted Zone A")
         finally:
             db.close()
 
@@ -191,7 +199,7 @@ class CameraStreamWorker:
         Reads frames as fast as they arrive over the socket, ensuring ZERO socket buffer buildup.
         Always keeps only the newest frame and drops older stale frames.
         """
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2000000|rtsp_transport;tcp"
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2000000|rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000"
         cap = cv2.VideoCapture(self.stream_url)
         # Minimize internal buffering in OpenCV backend where supported
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -211,6 +219,9 @@ class CameraStreamWorker:
 
             if not ret or frame is None or frame.size == 0:
                 consecutive_failures += 1
+                if now - self._latest_frame_time > 1.5:
+                    with self._frame_lock:
+                        self._latest_frame = None
                 if consecutive_failures >= 30:
                     logger.warning(f"[CameraWorker] Stream read failed {consecutive_failures} times for {self.camera_id}. Re-opening...")
                     cap.release()
@@ -294,9 +305,19 @@ class CameraStreamWorker:
             t_start = time.time()
             logger.debug(f"[YOLO] Inference start for {self.camera_id} (frame #{seq})")
 
-            # 1. Run YOLOv8 on all supported classes (Person, Vehicles, Animals)
+            # Dual-frame strategy: raw_frame untouched, frame_for_inference enhanced if low-light
+            raw_frame = frame_to_process
+            frame_for_inference, was_enhanced, enh_meta = self.enhancer.enhance(raw_frame)
+
+            with self._frame_lock:
+                self._latest_enhanced_frame = frame_for_inference
+                self._is_low_light = was_enhanced
+                self._current_brightness = enh_meta.get("brightness", 0.0)
+                self._current_gamma = enh_meta.get("gamma", 1.0)
+
+            # 1. Run YOLOv8 on inference frame (all supported classes: Person, Vehicles, Animals)
             raw_dets = self.detector.detect(
-                frame_to_process,
+                frame_for_inference,
                 camera_id=self.camera_id,
                 track=True,
                 conf_threshold=self.conf_threshold
@@ -305,11 +326,12 @@ class CameraStreamWorker:
             # 2. Update multi-object tracker for persistent IDs (Person #1, Car #1)
             active_tracks = self.tracker.update(raw_dets)
 
-            # 3. Process spatial zones & loitering in ThreatEngine
+            # 3. Process spatial zones & loitering in ThreatEngine (preserving raw_frame for evidence snapshots)
             self.threat_engine.process_tracks(
                 active_tracks,
                 video_id=None,
-                frame_bgr=frame_to_process
+                frame_bgr=raw_frame,
+                inference_bgr=frame_for_inference
             )
 
             t_end = time.time()
@@ -327,19 +349,29 @@ class CameraStreamWorker:
                 self._ai_fps_count = 0
                 self._ai_fps_window_start = t_end
 
-            # Diagnostics log
+            # Diagnostics log with real low-light telemetry
             logger.info(
+                f"[LOW_LIGHT] brightness={enh_meta['brightness']} enhancement={was_enhanced} | "
                 f"[YOLO] Inference end: {infer_ms:.1f}ms | Detection count: {len(raw_dets)} | "
                 f"[TRACKER] Active tracks: {len(active_tracks)} | AI FPS: {self._measured_ai_fps:.1f} | "
                 f"Latency: {self._measured_latency_ms:.0f}ms"
             )
 
-            # Deduplicated event emission for Detection Log
-            self._deduplicate_and_emit_detections(active_tracks, frame_to_process)
+            # Deduplicated event emission for Detection Log (pass inference frame for night ANPR, raw for evidence)
+            self._deduplicate_and_emit_detections(
+                active_tracks,
+                frame_bgr=raw_frame,
+                inference_bgr=frame_for_inference
+            )
 
         logger.info(f"[CameraWorker] AI loop exited for {self.camera_id}")
 
-    def _deduplicate_and_emit_detections(self, active_tracks: List[TrackedObject], frame_bgr: np.ndarray):
+    def _deduplicate_and_emit_detections(
+        self,
+        active_tracks: List[TrackedObject],
+        frame_bgr: np.ndarray,
+        inference_bgr: Optional[np.ndarray] = None
+    ):
         """
         Sensible deduplication for Detection Log:
         - Logs newly appeared track IDs immediately.
@@ -359,7 +391,7 @@ class CameraStreamWorker:
             if is_vehicle:
                 try:
                     plate_eval = anpr_engine.evaluate_vehicle_plate(
-                        frame_bgr=frame_bgr,
+                        frame_bgr=inference_bgr if inference_bgr is not None else frame_bgr,
                         vehicle_bbox=trk.bbox,
                         camera_id=self.camera_id,
                         track_id=trk.track_id,
@@ -562,14 +594,18 @@ class CameraStreamWorker:
             "conf_threshold": round(self.conf_threshold * 100, 1),
             "rotation": self.rotation,
             "source_type": self.source_type,
-            "active_viewers": self._active_viewers
+            "active_viewers": self._active_viewers,
+            "low_light": self._is_low_light,
+            "brightness": round(self._current_brightness, 1),
+            "gamma": round(self._current_gamma, 2)
         }
 
-    def generate_mjpeg(self):
+    def generate_mjpeg(self, view_mode: str = "auto"):
         """
         High-frame-rate MJPEG streaming generator for client browser.
         Fetches the latest available frame, paints cached tracking overlays and HUD,
         and yields JPEG bytes immediately without blocking on YOLO inference.
+        Supports view_mode: 'auto' (enhanced if low light), 'enhanced', 'original'.
         """
         self._active_viewers += 1
         self._last_viewer_time = time.time()
@@ -578,9 +614,27 @@ class CameraStreamWorker:
             last_sent_seq = -1
             while not self._stopped:
                 frame = None
+                is_enhanced_frame = False
+                is_low_light_active = False
+                cur_brightness = 0.0
+                cur_gamma = 1.0
+
                 with self._frame_lock:
                     if self._latest_frame is not None:
-                        frame = self._latest_frame.copy()
+                        is_low_light_active = self._is_low_light
+                        cur_brightness = self._current_brightness
+                        cur_gamma = self._current_gamma
+
+                        should_use_enhanced = (
+                            view_mode == "enhanced" or
+                            (view_mode == "auto" and is_low_light_active)
+                        )
+                        if should_use_enhanced and self._latest_enhanced_frame is not None:
+                            frame = self._latest_enhanced_frame.copy()
+                            is_enhanced_frame = True
+                        else:
+                            frame = self._latest_frame.copy()
+                            is_enhanced_frame = False
                         last_sent_seq = self._frame_seq
 
                 if frame is None:
@@ -669,6 +723,16 @@ class CameraStreamWorker:
                     cv2.putText(frame, metrics_txt, (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
                 else:
                     cv2.putText(frame, "AI PROCESSING: OFFLINE", (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 140, 255), 1)
+
+                # Real low-light status badge (Requirement #21)
+                if is_enhanced_frame and is_low_light_active:
+                    status_badge = f"LOW LIGHT • ENHANCED | Lum: {cur_brightness:.1f} | Gamma: {cur_gamma:.2f}"
+                    cv2.putText(frame, status_badge, (15, h_f - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1, cv2.LINE_AA)
+                elif view_mode == "original" and is_low_light_active:
+                    status_badge = f"ORIGINAL RAW VIEW | Lum: {cur_brightness:.1f}"
+                    cv2.putText(frame, status_badge, (15, h_f - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 255), 1, cv2.LINE_AA)
+                else:
+                    cv2.putText(frame, "NORMAL LIGHT", (15, h_f - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
 
                 # Time stamp
                 ts_str = datetime.now().strftime("%H:%M:%S")

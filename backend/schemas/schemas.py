@@ -180,10 +180,13 @@ class VideoResponse(BaseModel):
     filename:   str
     camera_id:  Optional[str]   = None
     status:     VideoStatus
-    file_path:  Optional[str]   = None
-    file_size:  Optional[int]   = None
-    duration:   Optional[float] = None
-    created_at: datetime
+    file_path:          Optional[str]   = None
+    enhanced_file_path: Optional[str]   = None
+    is_low_light:       Optional[bool]  = False
+    brightness:         Optional[float] = None
+    file_size:          Optional[int]   = None
+    duration:           Optional[float] = None
+    created_at:         datetime
 
     model_config = {"from_attributes": True}
 

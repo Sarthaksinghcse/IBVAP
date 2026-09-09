@@ -7,7 +7,7 @@ and dispatches events to the FastAPI backend.
 """
 import time
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import requests
 from shapely.geometry import Point, Polygon
 from ai_engine.tracking.tracker import TrackedObject
@@ -38,7 +38,7 @@ class ThreatEngine:
         restricted_zone_polygon: Optional[List[Tuple[float, float]]] = None,
         zone_name: Optional[str] = None,
         alert_cooldown_seconds: float = 20.0,
-        min_confidence: float = 0.35,
+        min_confidence: float = 0.25,
         alert_callback: Optional[object] = None,
         detection_callback: Optional[object] = None
     ):
@@ -74,24 +74,35 @@ class ThreatEngine:
 
     def set_zone(
         self,
-        restricted_zone_polygon: Optional[List[Tuple[float, float]]],
+        restricted_zone_polygon: Optional[Any],
         zone_name: Optional[str] = None
     ):
         """Update or clear the zone geometry for this camera source with coordinate normalization."""
         if restricted_zone_polygon and len(restricted_zone_polygon) >= 3:
-            # Check if coordinates are normalized 0.0 - 1.0 and scale to 0 - 100% if needed
-            max_val = max(max(float(pt[0]), float(pt[1])) for pt in restricted_zone_polygon)
-            if max_val <= 1.05:
-                normalized_coords = [(float(pt[0]) * 100.0, float(pt[1]) * 100.0) for pt in restricted_zone_polygon]
-            else:
-                normalized_coords = [(float(pt[0]), float(pt[1])) for pt in restricted_zone_polygon]
+            pts = []
+            for pt in restricted_zone_polygon:
+                if isinstance(pt, dict):
+                    pts.append((float(pt.get("x", 0.0)), float(pt.get("y", 0.0))))
+                elif isinstance(pt, (list, tuple)):
+                    pts.append((float(pt[0]), float(pt[1])))
 
-            self.zone_coords = normalized_coords
-            try:
-                self.zone_polygon = Polygon(self.zone_coords)
-                self.zone_name = zone_name or "Restricted Zone A"
-            except Exception as e:
-                logger.error(f"[ThreatEngine] Error building zone polygon: {e}")
+            if len(pts) >= 3:
+                max_val = max(max(p[0], p[1]) for p in pts)
+                if max_val <= 1.05:
+                    normalized_coords = [(p[0] * 100.0, p[1] * 100.0) for p in pts]
+                else:
+                    normalized_coords = pts
+
+                self.zone_coords = normalized_coords
+                try:
+                    self.zone_polygon = Polygon(self.zone_coords)
+                    self.zone_name = zone_name or "Restricted Zone A"
+                except Exception as e:
+                    logger.error(f"[ThreatEngine] Error building zone polygon: {e}")
+                    self.zone_polygon = None
+                    self.zone_name = None
+            else:
+                self.zone_coords = None
                 self.zone_polygon = None
                 self.zone_name = None
         else:
@@ -168,10 +179,18 @@ class ThreatEngine:
 
         return "OBJECT_DETECTED", "NONE", f"{track.object_label} observed at {source_label}.", evidence
 
-    def process_tracks(self, tracks: List[TrackedObject], video_id: Optional[str] = None, frame_bgr: Optional[object] = None) -> List[dict]:
+    def process_tracks(
+        self,
+        tracks: List[TrackedObject],
+        video_id: Optional[str] = None,
+        frame_bgr: Optional[object] = None,
+        inference_bgr: Optional[object] = None
+    ) -> List[dict]:
         """
         Evaluate all currently active tracks in the frame using the Threat-Correlation Engine.
         Generates detection events and dispatches alerts when correlated threat conditions are met.
+        `frame_bgr` is the untouched raw frame (used for snapshots and forensic evidence).
+        `inference_bgr` is the enhanced frame (used for night ANPR bumper/plate analysis).
         """
         current_time = time.time()
         processed_detections = []
@@ -195,14 +214,15 @@ class ThreatEngine:
             is_loitering = (zone_dwell >= self.loitering_threshold)
             logger.info(f"[ZONE] track_id={track.track_id} label={track.object_label} inside={is_in_zone}")
 
-            # Evaluate ANPR for vehicle tracks if frame is provided
+            # Evaluate ANPR for vehicle tracks (prefer inference_bgr for enhanced night plates)
             plate_info = None
-            if track.object_type in ["VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE"] and frame_bgr is not None:
+            anpr_frame = inference_bgr if inference_bgr is not None else frame_bgr
+            if track.object_type in ["VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE"] and anpr_frame is not None:
                 try:
                     from ai_engine.intelligence.anpr_engine import get_anpr_engine
                     anpr_eng = get_anpr_engine()
                     plate_info = anpr_eng.evaluate_vehicle_plate(
-                        frame_bgr=frame_bgr,
+                        frame_bgr=anpr_frame,
                         vehicle_bbox=track.bbox,
                         camera_id=self.camera_id,
                         track_id=track.track_id,

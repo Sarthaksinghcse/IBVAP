@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { Loader2, Camera, Video, VideoOff, AlertCircle, RotateCcw, ArrowLeft, ShieldAlert, LayoutGrid, Maximize2, Plus, WifiOff, Usb } from 'lucide-react';
+import { Loader2, Camera, Video, VideoOff, AlertCircle, RotateCcw, ArrowLeft, ShieldAlert, LayoutGrid, Maximize2, Plus, WifiOff, Usb, Moon, Eye } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { LiveBadge } from '../ui/Badge';
 import { ZoneEditorModal } from '../monitoring/ZoneEditorModal';
@@ -12,8 +12,12 @@ import type { Detection, Zone, CameraSourceType } from '../../types';
 
 // BoundingBox
 function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfidence?: boolean }) {
-  const isIntrusion = det.is_in_restricted_zone;
-  const isLoitering = det.loitering_duration && det.loitering_duration > 0;
+  if (!det || !det.bbox || typeof det.bbox.x !== 'number' || typeof det.bbox.y !== 'number' || typeof det.bbox.w !== 'number' || typeof det.bbox.h !== 'number' || det.bbox.w <= 0 || det.bbox.h <= 0) {
+    return null;
+  }
+
+  const isIntrusion = Boolean(det.is_in_restricted_zone);
+  const isLoitering = Boolean(det.loitering_duration && det.loitering_duration > 0);
   const isVehicle   = ['VEHICLE', 'CAR', 'TRUCK', 'BUS', 'MOTORCYCLE', 'BICYCLE'].includes(det.object_type);
   const isAnimal    = ['ANIMAL', 'DOG', 'CAT', 'BIRD', 'HORSE', 'COW', 'SHEEP'].includes(det.object_type);
   const faceMatch   = det.face_match;
@@ -25,6 +29,20 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
   const labelBg     = isWatchlist ? 'bg-red-700' : isIntrusion ? 'bg-red-500' : isLoitering ? 'bg-orange-500' : isVehicle ? 'bg-blue-600' : isAnimal ? 'bg-amber-600' : 'bg-green-600';
   const cornerColor = isWatchlist ? '#dc2626' : isIntrusion ? '#ef4444' : isVehicle ? '#3b82f6' : isAnimal ? '#d97706' : '#22c55e';
 
+  const safeConf = typeof det.confidence === 'number' && !isNaN(det.confidence) ? det.confidence.toFixed(1) : String(det.confidence ?? 0);
+  const safeFaceSim = faceMatch && typeof faceMatch.similarity === 'number' && !isNaN(faceMatch.similarity) ? faceMatch.similarity.toFixed(1) : '0.0';
+  const safePlateConf = plateInfo && typeof plateInfo.plate_confidence === 'number' && !isNaN(plateInfo.plate_confidence) ? plateInfo.plate_confidence.toFixed(1) : null;
+
+  const hasValidPlateBbox =
+    isVehicle &&
+    plateInfo?.plate_bbox &&
+    typeof plateInfo.plate_bbox.x === 'number' &&
+    typeof plateInfo.plate_bbox.y === 'number' &&
+    typeof plateInfo.plate_bbox.w === 'number' &&
+    typeof plateInfo.plate_bbox.h === 'number' &&
+    det.bbox.w > 0 &&
+    det.bbox.h > 0;
+
   return (
     <div className={`absolute border-2 ${boxClass} pointer-events-none`} style={{ left: `${det.bbox.x}%`, top: `${det.bbox.y}%`, width: `${det.bbox.w}%`, height: `${det.bbox.h}%` }}>
       {[{top:-1,left:-1,borderTop:`2px solid ${cornerColor}`,borderLeft:`2px solid ${cornerColor}`},{top:-1,right:-1,borderTop:`2px solid ${cornerColor}`,borderRight:`2px solid ${cornerColor}`},{bottom:-1,left:-1,borderBottom:`2px solid ${cornerColor}`,borderLeft:`2px solid ${cornerColor}`},{bottom:-1,right:-1,borderBottom:`2px solid ${cornerColor}`,borderRight:`2px solid ${cornerColor}`}].map((s,i)=>(<span key={i} className="absolute w-2 h-2" style={s}/>))}
@@ -33,7 +51,7 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
         {showConfidence && (
           <>
             <span className="opacity-75">—</span>
-            <span>{isWatchlist && faceMatch ? `${faceMatch.similarity.toFixed(1)}% match` : `${typeof det.confidence==='number'?det.confidence.toFixed(1):det.confidence}%`}</span>
+            <span>{isWatchlist && faceMatch ? `${safeFaceSim}% match` : `${safeConf}%`}</span>
           </>
         )}
         {isIntrusion && <span className="ml-1 bg-red-700/90 px-1 rounded-xs">🚨 [RESTRICTED]</span>}
@@ -42,7 +60,7 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
           <span className="ml-1 bg-white text-slate-900 font-bold px-1.5 py-0.2 rounded-xs text-[8px] flex items-center gap-1 shadow-sm border border-slate-300">
             <span className="bg-blue-700 text-white text-[7px] px-0.5 rounded-xs">IND</span>
             <span>PLATE: {plateInfo.plate_text}</span>
-            {plateInfo.plate_confidence != null && <span className="text-slate-600 font-medium">• OCR: {plateInfo.plate_confidence.toFixed(1)}%</span>}
+            {safePlateConf != null && <span className="text-slate-600 font-medium">• OCR: {safePlateConf}%</span>}
           </span>
         )}
         {isVehicle && plateInfo && plateInfo.plate_status === 'READING' && (
@@ -60,14 +78,14 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
       {isLoitering && (<div className="absolute -bottom-5 left-0 bg-orange-500 text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap shadow-md">LOITERING • {det.loitering_duration}s</div>)}
 
       {/* Real Localized License Plate Bounding Box with Genuine Number & OCR Confidence */}
-      {isVehicle && plateInfo?.plate_bbox && det.bbox.w > 0 && det.bbox.h > 0 && (
+      {hasValidPlateBbox && (
         <div
           className="absolute border-2 border-emerald-400 bg-emerald-500/20 pointer-events-none rounded-xs shadow-[0_0_8px_rgba(52,211,153,0.8)] z-10"
           style={{
-            left: `${Math.max(0, ((plateInfo.plate_bbox.x - det.bbox.x) / det.bbox.w) * 100)}%`,
-            top: `${Math.max(0, ((plateInfo.plate_bbox.y - det.bbox.y) / det.bbox.h) * 100)}%`,
-            width: `${Math.min(100, (plateInfo.plate_bbox.w / det.bbox.w) * 100)}%`,
-            height: `${Math.min(100, (plateInfo.plate_bbox.h / det.bbox.h) * 100)}%`,
+            left: `${Math.max(0, ((plateInfo.plate_bbox!.x - det.bbox.x) / det.bbox.w) * 100)}%`,
+            top: `${Math.max(0, ((plateInfo.plate_bbox!.y - det.bbox.y) / det.bbox.h) * 100)}%`,
+            width: `${Math.min(100, (plateInfo.plate_bbox!.w / det.bbox.w) * 100)}%`,
+            height: `${Math.min(100, (plateInfo.plate_bbox!.h / det.bbox.h) * 100)}%`,
           }}
         >
           <div className="absolute -bottom-5 left-0 flex items-center gap-1 bg-slate-950/90 backdrop-blur-xs border border-emerald-500/60 text-white text-[8px] font-mono font-bold px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap">
@@ -75,8 +93,8 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
               <>
                 <span className="bg-blue-700 text-white text-[7px] px-0.5 rounded-xs">IND</span>
                 <span className="text-emerald-300 font-bold">PLATE: {plateInfo.plate_text}</span>
-                {plateInfo.plate_confidence != null && (
-                  <span className="text-slate-300 text-[7px]">OCR: {plateInfo.plate_confidence.toFixed(1)}%</span>
+                {safePlateConf != null && (
+                  <span className="text-slate-300 text-[7px]">OCR: {safePlateConf}%</span>
                 )}
               </>
             ) : plateInfo.plate_status === 'READING' ? (
@@ -92,7 +110,6 @@ function BoundingBox({ det, showConfidence = true }: { det: Detection; showConfi
       )}
     </div>
   );
-
 }
 
 
@@ -152,6 +169,12 @@ export function CCTVPanel() {
   const settings          = useStore((s) => s.settings);
   const activeVideoUrl    = useStore((s) => s.activeVideoUrl);
   const activeVideoId     = useStore((s) => s.activeVideoId);
+  const enhancedVideoUrl  = useStore((s) => s.enhancedVideoUrl);
+  const isLowLightVideo   = useStore((s) => s.isLowLightVideo);
+  const videoViewMode     = useStore((s) => s.videoViewMode);
+  const setVideoViewMode  = useStore((s) => s.setVideoViewMode);
+  const setEnhancedVideoUrl = useStore((s) => s.setEnhancedVideoUrl);
+  const setIsLowLightVideo  = useStore((s) => s.setIsLowLightVideo);
   const uploadedVideoName = useStore((s) => s.uploadedVideoName);
   const setUploadedName   = useStore((s) => s.setUploadedVideoName);
   const uploadStatus      = useStore((s) => s.uploadStatus);
@@ -210,6 +233,14 @@ export function CCTVPanel() {
   const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0);
   const [videoDuration, setVideoDuration]             = useState(0);
   const [activeFrameDetections, setActiveFrameDetections] = useState<Detection[]>([]);
+  const [enhancedCameraFrame, setEnhancedCameraFrame] = useState<string | null>(null);
+  const [cameraLowLight, setCameraLowLight] = useState<boolean>(false);
+  const [cameraBrightness, setCameraBrightness] = useState<number>(0);
+  const [cameraGamma, setCameraGamma] = useState<number>(1.0);
+  const videoViewModeRef = useRef(videoViewMode);
+  useEffect(() => {
+    videoViewModeRef.current = videoViewMode;
+  }, [videoViewMode]);
 
   const selectedCam = cameras.find((c) => c.id === selectedCamId);
 
@@ -218,6 +249,7 @@ export function CCTVPanel() {
   const isVideoReady  = !cameraMode && !!activeVideoId && uploadStatus === 'COMPLETED' && !!activeVideoUrl;
   const isCameraMode  = cameraMode;
   const isCctvLive    = !cameraMode && !activeVideoId;
+  const effectiveEnhancedUrl = enhancedVideoUrl || (activeVideoId && isLowLightVideo ? `/storage/videos/${activeVideoId}_enhanced.mp4` : null);
 
   // Active Source Identity & Zone Configuration
   const activeSourceId = isCameraMode ? 'WEBCAM-01' : (activeVideoId ? activeVideoId : selectedCamId);
@@ -236,16 +268,26 @@ export function CCTVPanel() {
     const cW = c.clientWidth, cH = c.clientHeight;
     if (cW === 0 || cH === 0) return;
     const targetVideo = isCameraMode ? cameraVideoRef.current : (isVideoReady ? videoRef.current : null);
+    let nextRect = { left: 0, top: 0, width: cW, height: cH };
     if (targetVideo && targetVideo.videoWidth > 0 && targetVideo.videoHeight > 0) {
       const vAR = targetVideo.videoWidth / targetVideo.videoHeight;
       const cAR = cW / cH;
       let rW = cW, rH = cH, oX = 0, oY = 0;
       if (cAR > vAR) { rW = cH * vAR; oX = (cW - rW) / 2; }
       else            { rH = cW / vAR; oY = (cH - rH) / 2; }
-      setContentRect({ left:Math.round(oX), top:Math.round(oY), width:Math.round(rW), height:Math.round(rH) });
-    } else {
-      setContentRect({ left:0, top:0, width:cW, height:cH });
+      nextRect = { left: Math.round(oX), top: Math.round(oY), width: Math.round(rW), height: Math.round(rH) };
     }
+    setContentRect((prev) => {
+      if (
+        prev.left === nextRect.left &&
+        prev.top === nextRect.top &&
+        prev.width === nextRect.width &&
+        prev.height === nextRect.height
+      ) {
+        return prev;
+      }
+      return nextRect;
+    });
   }, [isVideoReady, isCameraMode]);
 
   useEffect(() => {
@@ -322,6 +364,9 @@ export function CCTVPanel() {
     active_tracks: number;
     ai_status: string;
     rotation?: number;
+    low_light?: boolean;
+    brightness?: number;
+    gamma?: number;
   } | null>(null);
 
   const currentRotation = selectedCam?.rotation ?? liveCamMetrics?.rotation ?? 0;
@@ -435,7 +480,8 @@ export function CCTVPanel() {
           faceEnabled,
           faceThreshold,
           anprEnabled,
-          activeSourceId
+          activeSourceId,
+          videoViewModeRef.current ? videoViewModeRef.current.toLowerCase() : 'enhanced'
         );
 
         if (!isMounted) return;
@@ -445,6 +491,18 @@ export function CCTVPanel() {
           setLiveAiState('OFFLINE');
         } else if (res) {
           setLiveAiState('PROCESSING');
+          if (res.low_light !== undefined) {
+            setCameraLowLight(Boolean(res.low_light));
+          }
+          if (res.brightness !== undefined) {
+            setCameraBrightness(res.brightness);
+          }
+          if (res.gamma !== undefined) {
+            setCameraGamma(res.gamma);
+          }
+          if (res.enhanced_image_base64) {
+            setEnhancedCameraFrame(res.enhanced_image_base64);
+          }
           // Mark AI as running on first successful response
           if (!webcamAiActiveRef.current) {
             webcamAiActiveRef.current = true;
@@ -523,7 +581,7 @@ export function CCTVPanel() {
       const recentLiveDets = detections.filter(
         (d) => d.camera_id === selectedCamId && !d.video_id && (nowMs - new Date(d.timestamp).getTime()) < 3500
       );
-      setActiveFrameDetections([]); // Live MJPEG stream paints bounding boxes directly on video canvas
+      setActiveFrameDetections(recentLiveDets);
       if (selectedCamId) setActiveTracksForSource(selectedCamId, recentLiveDets);
       return;
     }
@@ -555,21 +613,26 @@ export function CCTVPanel() {
           const filtered = Array.from(uniqueMap.values()).filter(
             (d) => typeof d.confidence === 'number' && d.confidence >= (settings.aiThreshold || 50)
           );
-          setActiveFrameDetections(filtered);
-          if (activeVideoId) {
-            setActiveTracksForSource(activeVideoId, filtered);
-          }
+          setActiveFrameDetections((prev) => {
+            if (prev.length === filtered.length && prev.every((p, i) => p.id === filtered[i].id)) {
+              return prev;
+            }
+            return filtered;
+          });
         }
       }
       animId = requestAnimationFrame(syncLoop);
     };
     animId = requestAnimationFrame(syncLoop);
     return () => cancelAnimationFrame(animId);
-  }, [isCctvLive, isCameraMode, isVideoReady, videoDetsSorted, frameDuration, detections, selectedCamId, activeVideoId, settings.aiThreshold, setActiveTracksForSource]);
+  }, [isCctvLive, isCameraMode, isVideoReady, videoDetsSorted, frameDuration, detections, selectedCamId, settings.aiThreshold]);
 
   const handleResetToLive = () => {
     setActiveVideoUrl(null);
     setActiveVideoId(null);
+    setEnhancedVideoUrl(null);
+    setIsLowLightVideo(false);
+    setVideoViewMode('ENHANCED');
     setUploadedName(null);
     setUploadStatus(null);
     setCurrentPlaybackTime(0);
@@ -659,6 +722,11 @@ export function CCTVPanel() {
               )}
               {isAnalyzing&&(<span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-400 light:bg-amber-100 light:text-amber-700 text-[10px] font-mono font-bold uppercase flex items-center gap-1"><Loader2 size={9} className="animate-spin"/>ANALYZING</span>)}
               {isVideoReady&&(<span className="px-1.5 py-0.5 rounded bg-blue-500/20 border border-blue-500/40 text-blue-400 light:bg-blue-100 light:text-blue-700 text-[10px] font-mono font-bold uppercase">CCTV CLIP</span>)}
+              {isVideoReady && isLowLightVideo && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-400 light:bg-amber-100 light:text-amber-700 text-[10px] font-mono font-bold uppercase flex items-center gap-1">
+                  <Moon size={10} /> LOW-LIGHT
+                </span>
+              )}
               {hasIntrusion&&(<span className="px-1.5 py-0.5 rounded bg-red-500/15 border border-red-500/30 text-red-400 light:bg-red-100 light:text-red-700 text-[10px] font-mono font-bold uppercase animate-pulse">🚨 INTRUSION</span>)}
             </>
           )}
@@ -704,6 +772,38 @@ export function CCTVPanel() {
                 </button>
               )}
 
+              {/* Device Camera Dual View Toggle (Enhanced vs Original) */}
+              {activeCameraStream && (
+                <div className="flex items-center bg-[#191c24] light:bg-[#f8fafc] border border-[#272b37] light:border-[#d9dde3] rounded-lg p-0.5 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setVideoViewMode('ENHANCED')}
+                    className={`px-2.5 py-1 rounded text-[10px] font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
+                      videoViewMode === 'ENHANCED'
+                        ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
+                        : 'text-[#9aa2b5] light:text-slate-600 hover:text-white light:hover:text-slate-900 font-medium'
+                    }`}
+                    title="Real-Time Low-Light Frame Enhancement"
+                  >
+                    <Moon size={11} className={videoViewMode === 'ENHANCED' ? 'text-slate-950 fill-current' : 'text-amber-400'} />
+                    <span>Enhanced View</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVideoViewMode('ORIGINAL')}
+                    className={`px-2.5 py-1 rounded text-[10px] font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
+                      videoViewMode === 'ORIGINAL'
+                        ? 'bg-slate-700 text-white font-bold shadow-xs'
+                        : 'text-[#9aa2b5] light:text-slate-600 hover:text-white light:hover:text-slate-900 font-medium'
+                    }`}
+                    title="Original Raw Camera Frame"
+                  >
+                    <Eye size={11} />
+                    <span>Original View</span>
+                  </button>
+                </div>
+              )}
+
               {/* Return to CCTV */}
               <button
                 type="button"
@@ -716,13 +816,47 @@ export function CCTVPanel() {
           ) : (
             <div className="flex items-center gap-2">
               {(isAnalyzing || isVideoReady) ? (
-                <button
-                  type="button"
-                  onClick={handleResetToLive}
-                  className="text-[10px] font-semibold text-[#9aa2b5] light:text-slate-700 hover:text-white light:hover:text-slate-900 px-2.5 py-1 rounded-lg bg-[#191c24] light:bg-slate-100 hover:bg-slate-700 light:hover:bg-slate-200 border border-[#272b37] light:border-[#d9dde3] transition-all cursor-pointer"
-                >
-                  Reset to Live Feed
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* Dual View Toggle: Enhanced vs Original View */}
+                  {isVideoReady && (effectiveEnhancedUrl || isLowLightVideo) && (
+                    <div className="flex items-center bg-[#191c24] light:bg-[#f8fafc] border border-[#272b37] light:border-[#d9dde3] rounded-lg p-0.5 shadow-xs">
+                      <button
+                        type="button"
+                        onClick={() => setVideoViewMode('ENHANCED')}
+                        className={`px-2.5 py-1 rounded text-[10px] font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
+                          videoViewMode === 'ENHANCED'
+                            ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
+                            : 'text-[#9aa2b5] light:text-slate-600 hover:text-white light:hover:text-slate-900 font-medium'
+                        }`}
+                        title="Low-Light Enhanced View (Hardware/AI Accelerated Video)"
+                      >
+                        <Moon size={11} className={videoViewMode === 'ENHANCED' ? 'text-slate-950 fill-current' : 'text-amber-400'} />
+                        <span>Enhanced View</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVideoViewMode('ORIGINAL')}
+                        className={`px-2.5 py-1 rounded text-[10px] font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
+                          videoViewMode === 'ORIGINAL'
+                            ? 'bg-slate-700 text-white font-bold shadow-xs'
+                            : 'text-[#9aa2b5] light:text-slate-600 hover:text-white light:hover:text-slate-900 font-medium'
+                        }`}
+                        title="Original Raw Frame View (Unprocessed Camera Feed)"
+                      >
+                        <Eye size={11} />
+                        <span>Original View</span>
+                      </button>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleResetToLive}
+                    className="text-[10px] font-semibold text-[#9aa2b5] light:text-slate-700 hover:text-white light:hover:text-slate-900 px-2.5 py-1 rounded-lg bg-[#191c24] light:bg-slate-100 hover:bg-slate-700 light:hover:bg-slate-200 border border-[#272b37] light:border-[#d9dde3] transition-all cursor-pointer"
+                  >
+                    Reset to Live Feed
+                  </button>
+                </div>
               ) : (
                 <>
                   <button
@@ -773,17 +907,33 @@ export function CCTVPanel() {
                 </div>
               )}
 
-              {/* Camera Orientation / Rotation Toggle Button */}
+              {/* Camera Orientation / Rotation & Live Enhancement Toggle Buttons */}
               {isCctvLive && selectedCam && (
-                <button
-                  type="button"
-                  onClick={handleCycleRotation}
-                  className="text-[10px] font-mono px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs font-semibold bg-[#191c24] light:bg-slate-100 hover:bg-slate-700 light:hover:bg-slate-200 text-slate-300 light:text-slate-700 border-[#272b37] light:border-[#d9dde3]"
-                  title="Rotate Camera Stream 90° (0°, 90°, 180°, 270°)"
-                >
-                  <RotateCcw size={12} className="text-cyan-400" />
-                  <span>{currentRotation}°</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setVideoViewMode(videoViewMode === 'ENHANCED' ? 'ORIGINAL' : 'ENHANCED')}
+                    className={`text-[10px] font-mono px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs font-semibold ${
+                      videoViewMode === 'ENHANCED'
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 light:bg-amber-100 light:text-amber-800 light:border-amber-300'
+                        : 'bg-[#191c24] light:bg-slate-100 hover:bg-slate-700 light:hover:bg-slate-200 text-[#9aa2b5] light:text-slate-700 border-[#272b37] light:border-[#d9dde3]'
+                    }`}
+                    title="Toggle Real-time Low-Light Video Enhancement for Live Stream"
+                  >
+                    <Moon size={11} className={videoViewMode === 'ENHANCED' ? 'text-amber-400' : 'text-slate-400'} />
+                    <span>{videoViewMode === 'ENHANCED' ? 'Night: ON' : 'Night: OFF'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCycleRotation}
+                    className="text-[10px] font-mono px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs font-semibold bg-[#191c24] light:bg-slate-100 hover:bg-slate-700 light:hover:bg-slate-200 text-slate-300 light:text-slate-700 border-[#272b37] light:border-[#d9dde3]"
+                    title="Rotate Camera Stream 90° (0°, 90°, 180°, 270°)"
+                  >
+                    <RotateCcw size={12} className="text-cyan-400" />
+                    <span>{currentRotation}°</span>
+                  </button>
+                </>
               )}
 
               {/* Zone Configuration Button */}
@@ -813,9 +963,9 @@ export function CCTVPanel() {
                   )}
                 </span>
               ) : (
-                <span className="text-[10px] font-mono text-[#9aa2b5] light:text-slate-500 font-medium">{systemStatus.fps.toFixed(1)} FPS • {systemStatus.processing_time_ms}ms</span>
+                <span className="text-[10px] font-mono text-[#9aa2b5] light:text-slate-500 font-medium">{(systemStatus?.fps ?? 0).toFixed(1)} FPS • {systemStatus?.processing_time_ms ?? 0}ms</span>
               )}
-              <LiveBadge/>
+              <LiveBadge active={isCameraMode ? activeCameraStream !== null : isCctvLive ? ((liveCamMetrics?.camera_fps ?? 0) > 0) : isVideoReady}/>
             </div>
           )}
         </div>
@@ -909,10 +1059,38 @@ export function CCTVPanel() {
                       onLoadedData={() => requestAnimationFrame(() => updateContentRect())}
                       onPlaying={() => requestAnimationFrame(() => updateContentRect())}
                       onResize={() => requestAnimationFrame(() => updateContentRect())}
-                      className="w-full h-full object-contain z-0"
+                      className={`w-full h-full object-contain ${
+                        videoViewMode === 'ENHANCED' && enhancedCameraFrame ? 'opacity-0' : 'opacity-100'
+                      }`}
                     />
-                    <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-black/75 backdrop-blur-sm px-2.5 py-1 rounded border border-white/10 text-[10px] font-mono text-emerald-400 z-30 pointer-events-none">
-                      <Camera size={11} /> LIVE DEVICE WEBCAM
+                    {videoViewMode === 'ENHANCED' && enhancedCameraFrame && (
+                      <img
+                        src={enhancedCameraFrame}
+                        alt="Enhanced Live Camera Feed"
+                        className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                      />
+                    )}
+                    <div className="absolute top-3 left-3 flex items-center gap-2 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1.5 bg-black/75 backdrop-blur-sm px-2.5 py-1 rounded border border-white/10 text-[10px] font-mono text-emerald-400">
+                        <Camera size={11} /> LIVE DEVICE WEBCAM
+                      </div>
+                      {cameraLowLight && videoViewMode === 'ENHANCED' ? (
+                        <div className="flex items-center gap-1.5 bg-cyan-950/85 border border-cyan-500/40 text-cyan-300 px-2.5 py-1 rounded text-[10px] font-mono shadow-lg backdrop-blur-sm">
+                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                          <Moon size={11} />
+                          <span>LOW LIGHT • ENHANCED | Lum: {cameraBrightness.toFixed(1)} | Gamma: {cameraGamma.toFixed(2)}</span>
+                        </div>
+                      ) : cameraLowLight && videoViewMode === 'ORIGINAL' ? (
+                        <div className="flex items-center gap-1.5 bg-amber-950/85 border border-amber-500/40 text-amber-300 px-2.5 py-1 rounded text-[10px] font-mono shadow-lg backdrop-blur-sm">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                          <span>ORIGINAL RAW VIEW | Lum: {cameraBrightness.toFixed(1)}</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 bg-slate-900/85 border border-slate-700/50 text-slate-300 px-2.5 py-1 rounded text-[10px] font-mono backdrop-blur-sm">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          <span>NORMAL LIGHT</span>
+                        </div>
+                      )}
                     </div>
                     <div className="absolute bottom-3 right-3 text-[10px] font-mono text-slate-400 bg-black/70 px-2 py-0.5 rounded border border-white/10 z-30 pointer-events-none">
                       {cameraResolution || '1080p'} • BROWSER LOCAL FEED
@@ -950,28 +1128,105 @@ export function CCTVPanel() {
             )}
 
             {/* ================= MODE 2: UPLOADED VIDEO ================= */}
-            {/* Analyzing state thumbnail */}
-            {isAnalyzing && pendingVideoBlob && (
-              <video src={pendingVideoBlob} muted playsInline className="w-full h-full object-contain z-0"/>
+            {/* Analyzing state viewport */}
+            {isAnalyzing && (
+              <div className="w-full h-full relative flex items-center justify-center overflow-hidden bg-[#090d16]">
+                {pendingVideoBlob ? (
+                  <video
+                    src={pendingVideoBlob}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    preload="auto"
+                    onError={(e) => {
+                      console.warn('[CCTVPanel] Preview video error:', e);
+                    }}
+                    className="w-full h-full object-contain z-0 opacity-75"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 font-mono text-xs">
+                    <div className="w-16 h-16 rounded-full border border-blue-500/30 flex items-center justify-center mb-3 bg-blue-500/10 animate-pulse">
+                      <Video size={28} className="text-blue-400" />
+                    </div>
+                    <span className="text-slate-300 font-semibold text-sm">CCTV Video Processing</span>
+                    <span className="text-slate-500 text-xs mt-1 font-sans">
+                      {uploadedVideoName || 'CCTV Analysis Job'}
+                    </span>
+                  </div>
+                )}
+
+                {/* Animated Analysis HUD overlay */}
+                <div className="absolute inset-0 bg-black/55 backdrop-blur-[2px] flex flex-col items-center justify-center z-25 p-6 text-center pointer-events-none">
+                  <div className="relative mb-3">
+                    <div className="w-14 h-14 rounded-full border-2 border-blue-500/30 border-t-blue-400 animate-spin flex items-center justify-center">
+                      <Loader2 size={22} className="text-blue-400 animate-spin" />
+                    </div>
+                    <div className="absolute inset-0 rounded-full border border-cyan-400/20 animate-ping pointer-events-none" />
+                  </div>
+
+                  <p className="text-blue-400 font-mono text-sm font-bold flex items-center gap-2">
+                    <span>Analyzing with YOLOv8 & DeepSORT Tracker...</span>
+                    <span className="bg-blue-500/20 text-blue-300 border border-blue-500/40 px-2 py-0.5 rounded text-xs">
+                      {videoAnalysisMetrics?.progress ?? 0}%
+                    </span>
+                  </p>
+
+                  {videoAnalysisMetrics && videoAnalysisMetrics.totalFrames > 0 ? (
+                    <div className="flex items-center gap-3 text-xs font-mono text-slate-300 mt-2 bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-700/60">
+                      <span>Frame: <strong className="text-white">{videoAnalysisMetrics.currentFrame}</strong> / {videoAnalysisMetrics.totalFrames}</span>
+                      <span className="text-slate-500">•</span>
+                      <span>Objects: <strong className="text-emerald-400">{videoAnalysisMetrics.detections}</strong></span>
+                      <span className="text-slate-500">•</span>
+                      <span>Tracks: <strong className="text-cyan-400">{videoAnalysisMetrics.tracks}</strong></span>
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 font-mono text-xs mt-2">
+                      Initializing video decoder & running AI inference pipeline...
+                    </p>
+                  )}
+
+                  <div className="w-72 h-2 bg-slate-800 rounded-full overflow-hidden mt-3 border border-slate-700/50 shadow-inner">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-400 rounded-full transition-all duration-300 shadow-[0_0_12px_rgba(59,130,246,0.5)]"
+                      style={{ width: `${Math.max(4, videoAnalysisMetrics?.progress ?? 0)}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-400 mt-2">
+                    FastAPI Background Worker Active • Real-time WebSocket Stream
+                  </span>
+                </div>
+              </div>
             )}
 
             {/* Completed playback video */}
-            {isVideoReady && (
-              <video
-                ref={videoRef} src={activeVideoUrl!} muted playsInline controls
-                onLoadedMetadata={(e)=>{setVideoDuration(e.currentTarget.duration);requestAnimationFrame(()=>updateContentRect());}}
-                onPlay={()=>requestAnimationFrame(()=>updateContentRect())}
-                onSeeked={()=>requestAnimationFrame(()=>updateContentRect())}
-                onTimeUpdate={(e)=>setCurrentPlaybackTime(e.currentTarget.currentTime)}
-                className="w-full h-full object-contain z-0"
-              />
-            )}
+            {isVideoReady && (() => {
+              const playbackSrc = (videoViewMode === 'ENHANCED' && effectiveEnhancedUrl) ? effectiveEnhancedUrl : activeVideoUrl!;
+              return (
+                <video
+                  key={`${playbackSrc}-${videoViewMode}`}
+                  ref={videoRef}
+                  src={playbackSrc}
+                  muted
+                  playsInline
+                  controls
+                  onError={(e) => {
+                    console.warn('[CCTVPanel] Active video playback error:', e);
+                  }}
+                  onLoadedMetadata={(e)=>{setVideoDuration(e.currentTarget.duration || 0);requestAnimationFrame(()=>updateContentRect());}}
+                  onPlay={()=>requestAnimationFrame(()=>updateContentRect())}
+                  onSeeked={()=>requestAnimationFrame(()=>updateContentRect())}
+                  onTimeUpdate={(e)=>setCurrentPlaybackTime(e.currentTarget.currentTime || 0)}
+                  className="w-full h-full object-contain z-0"
+                />
+              );
+            })()}
 
             {/* ================= MODE 3: LIVE CCTV / PHONE STREAM PROXY ================= */}
             {isCctvLive && selectedCam?.stream_url && (
               <img
-                key={`${selectedCamId}-${streamVersion}-${currentRotation}`}
-                src={`/api/cameras/${selectedCamId}/stream?conf=${(settings.aiThreshold ?? 30) / 100}&rotate=${currentRotation}&v=${streamVersion}`}
+                key={`${selectedCamId}-${streamVersion}-${currentRotation}-${videoViewMode}`}
+                src={`/api/cameras/${selectedCamId}/stream?conf=${(settings.aiThreshold ?? 30) / 100}&rotate=${currentRotation}&view=${videoViewMode.toLowerCase()}&v=${streamVersion}`}
                 alt={selectedCam.name}
                 className="w-full h-full object-contain z-0"
                 onError={(e) => {
@@ -1023,34 +1278,8 @@ export function CCTVPanel() {
             <div className="cctv-scanline z-10 pointer-events-none"/>
             <div className="cctv-vignette z-10 pointer-events-none"/>
 
-            {/* Analyzing overlay for uploaded video */}
-            {isAnalyzing && (
-              <div className="absolute inset-0 bg-black/65 flex flex-col items-center justify-center z-25 pointer-events-none p-6 text-center">
-                <Loader2 size={32} className="text-blue-400 animate-spin mb-3"/>
-                <p className="text-blue-400 font-mono text-sm font-bold">
-                  Analyzing with YOLOv8 & Tracker... {videoAnalysisMetrics?.progress ?? 0}%
-                </p>
-                {videoAnalysisMetrics && videoAnalysisMetrics.totalFrames > 0 ? (
-                  <p className="text-slate-300 font-mono text-xs mt-1.5">
-                    Frame {videoAnalysisMetrics.currentFrame} / {videoAnalysisMetrics.totalFrames} • {videoAnalysisMetrics.detections} objects ({videoAnalysisMetrics.tracks} tracks)
-                  </p>
-                ) : (
-                  <p className="text-slate-400 font-mono text-xs mt-1.5">
-                    Extracting video stream & running YOLOv8 pipeline...
-                  </p>
-                )}
-                <div className="w-64 h-1.5 bg-[#1e2d4a] rounded-full overflow-hidden mt-3">
-                  <div
-                    className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-300"
-                    style={{ width: `${Math.max(4, videoAnalysisMetrics?.progress ?? 0)}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-
-            {/* Bounding box & Zone overlay for live CCTV, analyzed video clips, and live laptop webcam */}
-            {overlayStyle && (isVideoReady || isCctvLive || isCameraMode) && (
+            {/* Bounding box & Zone overlay for analyzed video clips and live laptop webcam (live CCTV stream paints boxes directly in MJPEG) */}
+            {overlayStyle && (isVideoReady || isCameraMode) && (
               <div className="absolute z-20 pointer-events-none" style={overlayStyle}>
                 {showRestrictedZone && <RestrictedZoneOverlay zone={activeZone} />}
                 {settings.showBoundingBoxes &&
@@ -1067,11 +1296,33 @@ export function CCTVPanel() {
         {/* Corner timestamp */}
         <div className="absolute top-3 right-3 text-[10px] font-mono text-slate-400 bg-black/70 px-2 py-0.5 rounded border border-white/10 z-30 pointer-events-none">
           {isVideoReady
-            ? `T+${currentPlaybackTime.toFixed(2)}s / ${videoDuration?videoDuration.toFixed(1)+'s':'-'}`
+            ? `T+${(currentPlaybackTime || 0).toFixed(2)}s / ${videoDuration ? Number(videoDuration).toFixed(1)+'s' : '-'}`
             : isCameraMode
             ? `WEBCAM • ${new Date().toLocaleTimeString('en-IN',{hour12:false})}`
             : `${new Date().toLocaleTimeString('en-IN',{hour12:false})} • ${selectedCamId}`}
         </div>
+
+        {/* Night / Low-Light HUD status badge */}
+        {isVideoReady && (effectiveEnhancedUrl || isLowLightVideo) && (
+          <div className="absolute top-3 left-3 z-30 pointer-events-none flex items-center gap-1.5">
+            {videoViewMode === 'ENHANCED' && effectiveEnhancedUrl ? (
+              <span className="text-[10px] font-mono font-bold bg-amber-500/25 border border-amber-500/60 text-amber-300 backdrop-blur-xs px-2.5 py-1 rounded shadow-lg flex items-center gap-1.5">
+                <Moon size={11} className="text-amber-400 animate-pulse" />
+                <span>🌙 LOW LIGHT ENHANCED VIEW</span>
+                {videoAnalysisMetrics?.brightness != null && (
+                  <span className="text-amber-200/80 text-[9px] font-normal">
+                    (Lum: {videoAnalysisMetrics.brightness.toFixed(1)})
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono font-semibold bg-slate-900/80 border border-slate-700 text-slate-300 backdrop-blur-xs px-2.5 py-1 rounded shadow-lg flex items-center gap-1.5">
+                <Eye size={11} className="text-slate-400" />
+                <span>👁️ ORIGINAL RAW VIEW</span>
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Model name / Mode indicator */}
         <div className="absolute bottom-3 left-3 z-30 pointer-events-none">

@@ -124,7 +124,7 @@ export interface ANPRPlateInfo {
   plate_detected: boolean;
   plate_text?: string | null;
   plate_confidence?: number | null;
-  plate_status: 'READABLE' | 'UNREADABLE' | 'UNCERTAIN' | 'NOT_DETECTED';
+  plate_status: 'READABLE' | 'UNREADABLE' | 'UNCERTAIN' | 'NOT_DETECTED' | 'READING';
   plate_bbox?: BoundingBox | null;
   vehicle_type?: string;
 }
@@ -175,6 +175,9 @@ export interface Video {
   camera_id?: string;
   status: VideoStatus;
   file_path?: string;
+  enhanced_file_path?: string | null;
+  is_low_light?: boolean;
+  brightness?: number;
   file_size?: number;
   duration?: number;
   created_at: string;
@@ -233,7 +236,7 @@ export interface SystemStatusData {
 // ─── WebSocket Message ────────────────────────────────────────────────────────
 
 export interface WSMessage {
-  type: 'ALERT' | 'ALERT_UPDATE' | 'DETECTION' | 'SYSTEM' | 'VIDEO_PROGRESS' | 'VIDEO_STATUS';
+  type: 'ALERT' | 'ALERT_UPDATE' | 'DETECTION' | 'ANPR_EVENT' | 'SYSTEM' | 'VIDEO_PROGRESS' | 'VIDEO_STATUS';
   data: any;
   timestamp?: string;
 }

@@ -179,5 +179,41 @@ class TestRealObjectIntelligence(unittest.TestCase):
         self.assertEqual(len(alerts_fired), 0, "Animals must be filtered from high-threat intrusion alerts")
 
 
+    def test_fast_moving_target_velocity(self):
+        """Test tracker follows fast moving target via velocity vector estimation."""
+        tracker = Tracker(match_distance_threshold=35.0)
+
+        # Frame 1: Car moving fast to the right
+        d1 = Detection("CAR", "Car #1", 90.0, {"x": 10.0, "y": 50.0, "w": 10.0, "h": 10.0}, track_id=1)
+        t1 = tracker.update([d1])
+        self.assertEqual(t1[0].track_id, 1)
+
+        # Frame 2: Car jumps 15% to the right (speed = 15%/frame)
+        d2 = Detection("CAR", "Car #1", 91.0, {"x": 25.0, "y": 50.0, "w": 10.0, "h": 10.0}, track_id=1)
+        t2 = tracker.update([d2])
+        self.assertEqual(t2[0].track_id, 1)
+        self.assertGreater(t2[0].vx, 0.0, "Estimated horizontal velocity should be positive")
+
+        # Frame 3: Car jumps another 16% to the right without YOLO ID (raw_tid = None)
+        # IoU with previous position is 0.0, but velocity prediction should connect it!
+        d3 = Detection("CAR", "Car", 88.0, {"x": 41.0, "y": 50.0, "w": 10.0, "h": 10.0}, track_id=None)
+        t3 = tracker.update([d3])
+        self.assertEqual(t3[0].track_id, 1, "Track ID 1 should persist across fast motion via velocity prediction")
+
+    def test_vehicle_subclass_compatibility(self):
+        """Test vehicle subclass flickering (e.g. Car -> Truck) maintains track ID."""
+        tracker = Tracker()
+
+        # Frame 1: Detected as CAR
+        d1 = Detection("CAR", "Car #1", 85.0, {"x": 30.0, "y": 30.0, "w": 15.0, "h": 15.0}, track_id=5)
+        t1 = tracker.update([d1])
+        self.assertEqual(t1[0].track_id, 5)
+
+        # Frame 2: Flickered to TRUCK without YOLO ID
+        d2 = Detection("TRUCK", "Truck", 89.0, {"x": 31.0, "y": 30.0, "w": 15.0, "h": 15.0}, track_id=None)
+        t2 = tracker.update([d2])
+        self.assertEqual(t2[0].track_id, 5, "Flickering vehicle subtype should maintain stable track ID 5")
+
+
 if __name__ == "__main__":
     unittest.main()

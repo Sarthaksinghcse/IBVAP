@@ -22,6 +22,7 @@ import cv2
 from ai_engine.detection.detector import Detector
 from ai_engine.tracking.tracker import Tracker
 from ai_engine.intelligence.threat_engine import ThreatEngine
+from ai_engine.preprocessing.frame_enhancer import FrameEnhancer
 
 # Configure Logging
 logging.basicConfig(
@@ -66,6 +67,7 @@ class IBVAPPipeline:
         logger.info(f"╚════════════════════════════════════════════════════════════════╝")
 
         # Initialize Subsystems
+        self.enhancer = FrameEnhancer()
         self.detector = Detector(model_path=model_path, conf_threshold=conf_threshold)
         self.tracker = Tracker()
         self.threat_engine = ThreatEngine(
@@ -119,14 +121,22 @@ class IBVAPPipeline:
                 frame_idx += 1
                 processed_count += 1
 
-                # 1. Run YOLOv8 Detection & Tracking
-                detections = self.detector.detect(frame, camera_id=self.camera_id, track=True)
+                raw_frame = frame
+                frame_for_inference, was_enhanced, enh_meta = self.enhancer.enhance(raw_frame)
+
+                # 1. Run YOLOv8 Detection & Tracking on inference frame
+                detections = self.detector.detect(frame_for_inference, camera_id=self.camera_id, track=True)
 
                 # 2. Update Persistent Track Objects
                 active_tracks = self.tracker.update(detections)
 
-                # 3. Threat Engine Analysis & Event Dispatching
-                processed_dets = self.threat_engine.process_tracks(active_tracks, video_id=self.video_id, frame_bgr=frame)
+                # 3. Threat Engine Analysis & Event Dispatching (raw_frame preserved for snapshots/evidence)
+                processed_dets = self.threat_engine.process_tracks(
+                    active_tracks,
+                    video_id=self.video_id,
+                    frame_bgr=raw_frame,
+                    inference_bgr=frame_for_inference
+                )
 
                 # 4. Performance & Telemetry Reporting
                 elapsed = time.time() - start_time
@@ -141,6 +151,7 @@ class IBVAPPipeline:
                     zone_count = sum(1 for t in active_tracks if t.in_zone)
                     logger.info(
                         f"[Frame {frame_idx:04d}/{total_frames or 'Live'}] "
+                        f"[LOW_LIGHT] brightness={enh_meta['brightness']} enhancement={was_enhanced} | "
                         f"FPS: {curr_fps:.1f} | Detections: [{summary_str}] | "
                         f"Active Tracks: {len(active_tracks)} | Zone A: {zone_count}"
                     )

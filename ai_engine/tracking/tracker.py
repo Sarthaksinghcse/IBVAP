@@ -13,6 +13,18 @@ from ai_engine.detection.detector import Detection
 logger = logging.getLogger("tracker")
 
 
+VEHICLE_CLASSES = {"CAR", "TRUCK", "BUS", "MOTORCYCLE", "BICYCLE", "VEHICLE"}
+
+
+def are_classes_compatible(cls1: str, cls2: str) -> bool:
+    """Allow association across flickering vehicle subclasses (e.g. Car vs Truck)."""
+    if cls1 == cls2:
+        return True
+    if cls1 in VEHICLE_CLASSES and cls2 in VEHICLE_CLASSES:
+        return True
+    return False
+
+
 class TrackedObject:
     """Represents an active track across multiple frames."""
     def __init__(self, track_id: int, object_type: str, object_label: str, bbox: dict, confidence: float):
@@ -31,6 +43,8 @@ class TrackedObject:
         self.zone_name     = None
         self.zone_entry_time: Optional[float] = None
         self.trajectory    = []                # List of (center_x, center_y) points
+        self.vx            = 0.0               # Estimated horizontal velocity (% per frame)
+        self.vy            = 0.0               # Estimated vertical velocity (% per frame)
 
     @property
     def dwell_time(self) -> float:
@@ -120,12 +134,14 @@ class Tracker:
         best_score = -1.0
 
         for tid, trk in self.tracks.items():
-            if tid in active_ids or trk.object_type != det.object_type:
+            if tid in active_ids or not are_classes_compatible(trk.object_type, det.object_type):
                 continue
 
             iou = _compute_iou(det.bbox, trk.bbox)
-            tcx, tcy = trk.center
-            dist = math.hypot(dx - tcx, dy - tcy)
+            # Predict position using estimated velocity for moving targets
+            pred_cx = trk.center[0] + trk.vx
+            pred_cy = trk.center[1] + trk.vy
+            dist = math.hypot(dx - pred_cx, dy - pred_cy)
 
             # Combined score: IoU overlap takes priority [1.15, 2.0], proximity [0.0, 1.0)
             prox_score = max(0.0, 1.0 - (dist / self.match_distance_threshold))
@@ -192,8 +208,21 @@ class Tracker:
             active_ids.add(tid)
 
             if tid in self.tracks:
-                # Update existing track
+                # Update existing track with velocity smoothing
                 track = self.tracks[tid]
+                old_cx, old_cy = track.center
+                new_cx = det.bbox["x"] + det.bbox["w"] / 2.0
+                new_cy = det.bbox["y"] + det.bbox["h"] / 2.0
+                inst_vx = new_cx - old_cx
+                inst_vy = new_cy - old_cy
+                track.vx = 0.6 * track.vx + 0.4 * inst_vx
+                track.vy = 0.6 * track.vy + 0.4 * inst_vy
+
+                # Adopt higher-confidence vehicle sub-type if flickering
+                if are_classes_compatible(track.object_type, det.object_type) and det.confidence > track.confidence:
+                    track.object_type = det.object_type
+                    track.object_label = det.object_id
+
                 track.bbox = det.bbox
                 track.confidence = det.confidence
                 track.last_seen = current_time

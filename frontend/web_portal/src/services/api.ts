@@ -89,6 +89,10 @@ export interface WebcamInferResponse {
   detections: Detection[];
   frame_seq: number;
   camera_id: string;
+  low_light?: boolean;
+  brightness?: number;
+  gamma?: number;
+  enhanced_image_base64?: string | null;
   error?: string;
 }
 
@@ -99,7 +103,8 @@ export const inferWebcamFrame = (
   faceRecognitionEnabled: boolean = true,
   faceThreshold: number = 0.45,
   anprEnabled: boolean = true,
-  cameraId: string = 'WEBCAM-01'
+  cameraId: string = 'WEBCAM-01',
+  viewMode: string = 'enhanced'
 ): Promise<WebcamInferResponse> =>
   client
     .post<WebcamInferResponse>('/api/cameras/webcam/infer', {
@@ -110,6 +115,7 @@ export const inferWebcamFrame = (
       face_recognition_enabled: faceRecognitionEnabled,
       face_threshold: faceThreshold,
       anpr_enabled: anprEnabled,
+      view_mode: viewMode,
     })
     .then((r) => r.data);
 
@@ -171,13 +177,16 @@ export const getVideos = (): Promise<Video[]> =>
 export const getVideoById = (id: string): Promise<Video> =>
   client.get<Video>(`/api/videos/${id}`).then((r) => r.data);
 
+export const getVideo = getVideoById;
+
 export const uploadVideo = (
   formData: FormData,
   onProgress?: (pct: number) => void
 ): Promise<Video> =>
   client
     .post<Video>('/api/videos/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+      headers: { 'Content-Type': undefined },
+      timeout: 600000,
       onUploadProgress: (e) => {
         if (onProgress && e.total) {
           onProgress(Math.round((e.loaded * 100) / e.total));
@@ -198,6 +207,10 @@ export interface VideoAnalysisStatus {
   detections: number;
   tracks: number;
   events: number;
+  low_light?: boolean;
+  brightness?: number;
+  raw_video_url?: string | null;
+  enhanced_video_url?: string | null;
   error?: string | null;
 }
 

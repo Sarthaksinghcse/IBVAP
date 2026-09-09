@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useStore } from '../../store/useStore';
 import type { Detection } from '../../types';
 import { Activity, Loader2 } from 'lucide-react';
@@ -177,7 +178,8 @@ function DetectionRow({
 
   let timeLabel = '00:00:00';
   if (isVideoMode && det.video_time_sec != null) {
-    timeLabel = `T+${det.video_time_sec.toFixed(1)}s`;
+    const sec = typeof det.video_time_sec === 'number' ? det.video_time_sec : Number(det.video_time_sec);
+    timeLabel = isNaN(sec) ? '00:00:00' : `T+${sec.toFixed(1)}s`;
   } else {
     timeLabel = formatEventTime(det.timestamp, timeZone, timeFormat, true);
   }
@@ -189,6 +191,8 @@ function DetectionRow({
     const isReading = det.plate_info?.plate_status === 'READING';
     const plateText = det.plate_info?.plate_text;
     const plateConf = det.plate_info?.plate_confidence;
+    const safePlateConf = typeof plateConf === 'number' && !isNaN(plateConf) ? plateConf.toFixed(1) : (plateConf ? String(plateConf) : null);
+    const safeDetConf = typeof det.confidence === 'number' && !isNaN(det.confidence) ? det.confidence.toFixed(1) : String(det.confidence ?? 0);
 
     return (
       <div className="py-2.5 px-2 border-b border-[#1e2d4a]/70 last:border-0 hover:bg-slate-800/30 transition-colors rounded-md my-0.5">
@@ -222,7 +226,7 @@ function DetectionRow({
 
           {showConfidence && (
             <span className="text-[10px] font-mono text-slate-400">
-              {isReadable && plateConf != null ? `OCR: ${plateConf.toFixed(1)}%` : `${typeof det.confidence === 'number' ? det.confidence.toFixed(1) : det.confidence}%`}
+              {isReadable && safePlateConf != null ? `OCR: ${safePlateConf}%` : `${safeDetConf}%`}
             </span>
           )}
         </div>
@@ -231,6 +235,8 @@ function DetectionRow({
   }
 
   // Standard Target Observation Row
+  const safeDetConf = typeof det.confidence === 'number' && !isNaN(det.confidence) ? det.confidence.toFixed(1) : String(det.confidence ?? 0);
+
   return (
     <div className="flex items-center gap-3 py-1.5 border-b border-[#1e2d4a]/60 last:border-0 transition-colors">
       {/* Timestamp */}
@@ -249,7 +255,7 @@ function DetectionRow({
       {/* Confidence */}
       {showConfidence && (
         <span className="text-[10px] font-mono text-slate-400 flex-shrink-0">
-          {typeof det.confidence === 'number' ? `${det.confidence.toFixed(1)}%` : `${det.confidence}%`}
+          {safeDetConf}%
         </span>
       )}
 
@@ -281,24 +287,26 @@ export function DetectionLog({ cameraId }: DetectionLogProps) {
   const liveSourceId = cameraMode ? (cameraId || 'WEBCAM-01') : (cameraId || selectedCameraId);
 
   // 1. Isolate active source detections (no cross-source leaking)
-  const sourceDetections = isVideoMode
-    ? detections.filter((d) => d.video_id === activeVideoId)
-    : cameraMode
-    ? detections.filter((d) => d.camera_id === liveSourceId || d.camera_id === 'WEBCAM-01' || d.camera_id === 'webcam')
-    : isAnalyzing
-    ? [] // Empty during video analysis
-    : detections.filter((d) => d.camera_id === liveSourceId && !d.video_id);
+  const sourceDetections = useMemo(() => {
+    return (isVideoMode || isAnalyzing)
+      ? detections.filter((d) => d.video_id === activeVideoId)
+      : cameraMode
+      ? detections.filter((d) => d.camera_id === liveSourceId || d.camera_id === 'WEBCAM-01' || d.camera_id === 'webcam')
+      : detections.filter((d) => d.camera_id === liveSourceId && !d.video_id);
+  }, [detections, isVideoMode, isAnalyzing, activeVideoId, cameraMode, liveSourceId]);
 
   const cameras           = useStore((s) => s.cameras);
   const activeCam         = cameras.find((c) => c.id === liveSourceId);
   const isLiveStreamActive = cameraMode || Boolean(activeCam && activeCam.status === 'ONLINE');
 
-  // 2. Aggregate frame observations into operator activity events
-  const aggregated = aggregateDetections(
-    sourceDetections,
-    isVideoMode,
-    settings.aiThreshold ?? 30
-  );
+  // 2. Aggregate frame observations into operator activity events (memoized)
+  const aggregated = useMemo(() => {
+    return aggregateDetections(
+      sourceDetections,
+      isVideoMode || isAnalyzing,
+      settings.aiThreshold ?? 30
+    );
+  }, [sourceDetections, isVideoMode, isAnalyzing, settings.aiThreshold]);
 
   return (
     <div className="bg-[#121419] light:bg-white border border-[#272b37] light:border-[#d3d8e3] rounded-2xl flex flex-col h-full overflow-hidden shadow-card transition-colors">
@@ -329,12 +337,12 @@ export function DetectionLog({ cameraId }: DetectionLogProps) {
           )}
         </div>
         <span className="text-[10px] font-mono text-[#9aa2b5] light:text-slate-500">
-          {isAnalyzing ? 'Processing...' : `${aggregated.length} event${aggregated.length !== 1 ? 's' : ''} logged`}
+          {isAnalyzing && aggregated.length === 0 ? 'Processing...' : `${aggregated.length} event${aggregated.length !== 1 ? 's' : ''} logged`}
         </span>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-1">
-        {isAnalyzing ? (
+        {isAnalyzing && aggregated.length === 0 ? (
           <div className="py-12 text-center">
             <div className="w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto mb-2 text-emerald-400">
               <Loader2 size={16} className="animate-spin" />
@@ -355,14 +363,22 @@ export function DetectionLog({ cameraId }: DetectionLogProps) {
             </p>
           </div>
         ) : (
-          aggregated.map((det) => (
-            <DetectionRow
-              key={det.id}
-              det={det}
-              isVideoMode={isVideoMode}
-              showConfidence={settings.showConfidence ?? true}
-            />
-          ))
+          <>
+            {isAnalyzing && (
+              <div className="flex items-center gap-2 px-2.5 py-1.5 my-1 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[10px] font-mono text-amber-300">
+                <Loader2 size={12} className="animate-spin text-amber-400 flex-shrink-0" />
+                <span>Live video analysis in progress — streaming real-time detections</span>
+              </div>
+            )}
+            {aggregated.map((det) => (
+              <DetectionRow
+                key={det.id}
+                det={det}
+                isVideoMode={isVideoMode || isAnalyzing}
+                showConfidence={settings.showConfidence ?? true}
+              />
+            ))}
+          </>
         )}
       </div>
     </div>

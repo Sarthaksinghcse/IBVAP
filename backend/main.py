@@ -15,13 +15,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 import sys
-_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_backend_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.dirname(_backend_dir)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from database.init_db import init_db
 from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr
-from websocket.manager import router as ws_router
+from websocket.manager import router as ws_router, manager
 
 
 import os
@@ -40,7 +43,24 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 55)
     logger.info("  IBVAP Backend Starting…")
     logger.info("=" * 55)
+    import asyncio
+    manager.set_loop(asyncio.get_running_loop())
     init_db()
+
+    # Clean up stale video analysis jobs interrupted by server restart
+    try:
+        from database.database import SessionLocal
+        from models.models import Video
+        s = SessionLocal()
+        stuck_vids = s.query(Video).filter(Video.status.in_(["PROCESSING", "AI_ANALYZING"])).all()
+        for sv in stuck_vids:
+            sv.status = "ERROR"
+            logger.info(f"[Lifespan] Reset stale video analysis job {sv.id} to ERROR")
+        s.commit()
+        s.close()
+    except Exception as se:
+        logger.warning(f"[Lifespan] Failed checking stale video jobs: {se}")
+
     logger.info("  Backend ready. Docs: http://localhost:8000/docs")
     yield
     logger.info("  IBVAP Backend shutting down.")
@@ -60,7 +80,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
+    allow_origins     = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"],
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
@@ -101,5 +122,29 @@ def root():
     }
 
 @app.get("/health", tags=["Health"])
+@app.get("/api/health", tags=["Health"])
 def health():
-    return {"status": "ok"}
+    db_ok = False
+    try:
+        from database.database import SessionLocal
+        from sqlalchemy import text
+        s = SessionLocal()
+        s.execute(text("SELECT 1"))
+        s.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "yolov8n.pt")
+    yolo_ok = os.path.exists(model_path)
+
+    tesseract_ok = os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+
+    return {
+        "status": "healthy" if db_ok and yolo_ok else "degraded",
+        "api": "online",
+        "database": "connected" if db_ok else "error",
+        "yolo_model": "ready" if yolo_ok else "missing",
+        "tesseract_ocr": "installed" if tesseract_ok else "not_found",
+        "active_ws_clients": len(manager.active_connections) if hasattr(manager, "active_connections") else 0,
+    }

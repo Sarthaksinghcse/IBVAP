@@ -63,6 +63,8 @@ export function UploadPanel() {
     setUploadProgress,
     setUploadStatus,
     setActiveVideoUrl,
+    setEnhancedVideoUrl,
+    setIsLowLightVideo,
     setActiveVideoId,
     setUploadedVideoName,
     setDetections,
@@ -72,6 +74,7 @@ export function UploadPanel() {
     selectedCameraId,
     videoAnalysisMetrics,
     setVideoAnalysisMetrics,
+    setVideoViewMode,
     activeVideoId
   } = useStore();
 
@@ -79,14 +82,157 @@ export function UploadPanel() {
   const [loadingExisting, setLoadingExisting] = useState(false);
 
   useEffect(() => {
+    // 1. Fetch completed existing videos for quick loading
     api.getVideos()
       .then((vList) => {
         if (vList && vList.length > 0) {
-          // Filter to completed videos
           setExistingVideos(vList.filter((v) => v.status === 'COMPLETED'));
         }
       })
       .catch((err) => console.warn('[UploadPanel] Failed to fetch existing videos:', err));
+
+    // 2. Reconnect to persisted active analysis job if exists
+    const persistedVideoId = activeVideoId || (() => {
+      try { return localStorage.getItem('shield_active_video_id'); } catch { return null; }
+    })();
+
+    if (persistedVideoId) {
+      console.log('[FRONTEND] Checking persisted analysis job:', persistedVideoId);
+      api.getVideoAnalysisStatus(persistedVideoId)
+        .then((s) => {
+          if (s && (s.status === 'PROCESSING' || s.status === 'AI_ANALYZING')) {
+            console.log('[FRONTEND] Reconnected to running analysis job:', persistedVideoId);
+            setStatus('AI_ANALYZING');
+            setUploadStatus('AI_ANALYZING');
+            setActiveVideoId(persistedVideoId);
+            setVideoAnalysisMetrics({
+              progress: s.progress,
+              currentFrame: s.current_frame,
+              totalFrames: s.total_frames,
+              fps: s.fps,
+              detections: s.detections,
+              tracks: s.tracks,
+              events: s.events,
+              status: s.status,
+              low_light: Boolean(s.low_light),
+              brightness: s.brightness,
+              raw_video_url: s.raw_video_url,
+              enhanced_video_url: s.enhanced_video_url,
+            });
+
+            // Start polling for this persisted video
+            const pollPersisted = async () => {
+              try {
+                const cur = await api.getVideoAnalysisStatus(persistedVideoId);
+                setVideoAnalysisMetrics({
+                  progress: cur.progress,
+                  currentFrame: cur.current_frame,
+                  totalFrames: cur.total_frames,
+                  fps: cur.fps,
+                  detections: cur.detections,
+                  tracks: cur.tracks,
+                  events: cur.events,
+                  status: cur.status,
+                  low_light: Boolean(cur.low_light),
+                  brightness: cur.brightness,
+                  raw_video_url: cur.raw_video_url,
+                  enhanced_video_url: cur.enhanced_video_url,
+                });
+                if (cur.status === 'PROCESSING' || cur.status === 'AI_ANALYZING') {
+                  pollTimerRef.current = setTimeout(pollPersisted, 800);
+                } else if (cur.status === 'COMPLETED') {
+                  setStatus('COMPLETED');
+                  setUploadStatus('COMPLETED');
+                  setVideoAnalysisMetrics({
+                    progress: 100,
+                    status: 'COMPLETED',
+                    low_light: Boolean(cur.low_light),
+                    brightness: cur.brightness,
+                    raw_video_url: cur.raw_video_url,
+                    enhanced_video_url: cur.enhanced_video_url,
+                  });
+                  if (cur.raw_video_url) setActiveVideoUrl(cur.raw_video_url);
+                  if (cur.enhanced_video_url) setEnhancedVideoUrl(cur.enhanced_video_url);
+                  const isLow = Boolean(cur.low_light);
+                  setIsLowLightVideo(isLow);
+                  if (isLow) setVideoViewMode('ENHANCED');
+
+                  api.getVideoById(persistedVideoId).then((v: import('../../types').Video) => {
+                    const basename = v.file_path ? v.file_path.split(/[\\/]/).pop() : `${v.id}_${v.filename}`;
+                    if (basename) setActiveVideoUrl(`/storage/videos/${basename}`);
+                    if (v.enhanced_file_path) {
+                      const enhBasename = v.enhanced_file_path.split(/[\\/]/).pop();
+                      if (enhBasename) setEnhancedVideoUrl(`/storage/videos/${enhBasename}`);
+                    }
+                    if (v.is_low_light) {
+                      setIsLowLightVideo(true);
+                      setVideoViewMode('ENHANCED');
+                    }
+                  }).catch(() => {});
+                  api.getDetections(undefined, persistedVideoId, 5000).then((dets) => {
+                    if (dets) setDetections(dets);
+                  }).catch(() => {});
+                }
+              } catch (pErr) {
+                console.warn('[UploadPanel] Persisted poll error:', pErr);
+              }
+            };
+            pollTimerRef.current = setTimeout(pollPersisted, 800);
+          } else if (s && s.status === 'COMPLETED') {
+            console.log('[FRONTEND] Reconnected to completed analysis job:', persistedVideoId);
+            setStatus('COMPLETED');
+            setUploadStatus('COMPLETED');
+            setActiveVideoId(persistedVideoId);
+            setVideoAnalysisMetrics({
+              progress: 100,
+              currentFrame: s.current_frame || 0,
+              totalFrames: s.total_frames || 0,
+              fps: s.fps || 25.0,
+              detections: s.detections || 0,
+              tracks: s.tracks || 0,
+              events: s.events || 0,
+              status: 'COMPLETED',
+              low_light: Boolean(s.low_light),
+              brightness: s.brightness,
+              raw_video_url: s.raw_video_url,
+              enhanced_video_url: s.enhanced_video_url,
+            });
+            if (s.raw_video_url) setActiveVideoUrl(s.raw_video_url);
+            if (s.enhanced_video_url) setEnhancedVideoUrl(s.enhanced_video_url);
+            const isLow = Boolean(s.low_light);
+            setIsLowLightVideo(isLow);
+            if (isLow) setVideoViewMode('ENHANCED');
+
+            api.getVideoById(persistedVideoId).then((v: import('../../types').Video) => {
+              if (v) {
+                setUploadedVideoName(v.filename);
+                const rawPath = v.file_path;
+                const basename = rawPath ? rawPath.split(/[\\/]/).pop() : `${v.id}_${v.filename}`;
+                if (basename) setActiveVideoUrl(`/storage/videos/${basename}`);
+                if (v.enhanced_file_path) {
+                  const enhBasename = v.enhanced_file_path.split(/[\\/]/).pop();
+                  if (enhBasename) setEnhancedVideoUrl(`/storage/videos/${enhBasename}`);
+                }
+                if (v.is_low_light) {
+                  setIsLowLightVideo(true);
+                  setVideoViewMode('ENHANCED');
+                }
+              }
+            }).catch(() => {});
+
+            api.getDetections(undefined, persistedVideoId, 5000).then((dets) => {
+              if (dets && dets.length > 0) setDetections(dets);
+            }).catch(() => {});
+          }
+        })
+        .catch((e) => {
+          console.warn('[UploadPanel] Persisted job lookup error:', e);
+        });
+    }
+
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
   }, []);
 
   const handleSelectExistingVideo = async (v: import('../../types').Video) => {
@@ -107,6 +253,20 @@ export function UploadPanel() {
       setActiveVideoUrl(`/storage/videos/${basename}`);
     }
 
+    if (v.enhanced_file_path) {
+      const enhBasename = v.enhanced_file_path.split(/[\\/]/).pop();
+      if (enhBasename) {
+        setEnhancedVideoUrl(`/storage/videos/${enhBasename}`);
+      }
+    } else {
+      setEnhancedVideoUrl(null);
+    }
+    const isLow = Boolean(v.is_low_light);
+    setIsLowLightVideo(isLow);
+    if (isLow) {
+      setVideoViewMode('ENHANCED');
+    }
+
     try {
       const dets = await api.getDetections(undefined, v.id, 5000);
       if (dets && dets.length > 0) {
@@ -125,12 +285,6 @@ export function UploadPanel() {
     setLoadingExisting(false);
   };
 
-  useEffect(() => {
-    return () => {
-      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    };
-  }, []);
-
   const handleFile = (f: File) => {
     if (!f.type.startsWith('video/') && !f.name.match(/\.(mp4|avi|mkv|mov)$/i)) {
       setError('Please select a valid video file (mp4, avi, mkv)');
@@ -143,7 +297,13 @@ export function UploadPanel() {
     setDetections([]);
     setUploadStatus(null);
     setVideoAnalysisMetrics(null);
-    if (pendingVideoBlob) URL.revokeObjectURL(pendingVideoBlob);
+    if (pendingVideoBlob) {
+      try { URL.revokeObjectURL(pendingVideoBlob); } catch {}
+    }
+    try {
+      localStorage.removeItem('shield_active_video_id');
+      localStorage.removeItem('shield_uploaded_video_name');
+    } catch {}
     const blobUrl = URL.createObjectURL(f);
     setPendingVideoBlob(blobUrl);
     setUploadedVideoName(f.name);
@@ -194,6 +354,7 @@ export function UploadPanel() {
     }
 
     try {
+      console.log('[VIDEO UPLOAD] started', { file: file.name, size: file.size, camera: selectedCameraId || 'BOP-07' });
       setStatus('UPLOADING');
       const formData = new FormData();
       formData.append('file', file);
@@ -209,11 +370,13 @@ export function UploadPanel() {
       setUploadedVideoName(file.name);
       setStatus('AI_ANALYZING');
       setUploadStatus('AI_ANALYZING');
+      console.log('[VIDEO UPLOAD] completed, starting analysis polling', { videoId });
 
       // Poll real backend video analysis status
       const pollVideoStatus = async () => {
         try {
           const s = await api.getVideoAnalysisStatus(videoId);
+          console.log('[ANALYSIS]', { job_id: videoId, status: s.status, progress: s.progress, frame: s.current_frame, detections: s.detections });
           setVideoAnalysisMetrics({
             progress: s.progress,
             currentFrame: s.current_frame,
@@ -228,11 +391,25 @@ export function UploadPanel() {
           if (s.status === 'PROCESSING' || s.status === 'AI_ANALYZING') {
             setStatus('AI_ANALYZING');
             setUploadStatus('AI_ANALYZING');
+            if (s.detections > 0) {
+              api.getDetections(undefined, videoId, 200).then((liveDets) => {
+                if (liveDets && liveDets.length > 0) {
+                  setDetections(liveDets);
+                }
+              }).catch(() => {});
+            }
             pollTimerRef.current = setTimeout(pollVideoStatus, 800);
           } else if (s.status === 'COMPLETED') {
             setStatus('COMPLETED');
             setUploadStatus('COMPLETED');
-            setVideoAnalysisMetrics({ progress: 100, status: 'COMPLETED' });
+            setVideoAnalysisMetrics({
+              progress: 100,
+              status: 'COMPLETED',
+              low_light: s.low_light,
+              brightness: s.brightness,
+              raw_video_url: s.raw_video_url,
+              enhanced_video_url: s.enhanced_video_url,
+            });
 
             // 1. Activate video URL for playback in CCTVPanel
             const rawPath = res.file_path;
@@ -244,13 +421,18 @@ export function UploadPanel() {
               setActiveVideoUrl(`/storage/videos/${basename}`);
             }
 
-            // 2. Revoke thumbnail preview blob
-            if (pendingVideoBlob) {
-              URL.revokeObjectURL(pendingVideoBlob);
-              setPendingVideoBlob(null);
+            if (s.enhanced_video_url) {
+              setEnhancedVideoUrl(s.enhanced_video_url);
+            } else {
+              setEnhancedVideoUrl(null);
+            }
+            const isLow = Boolean(s.low_light);
+            setIsLowLightVideo(isLow);
+            if (isLow) {
+              setVideoViewMode('ENHANCED');
             }
 
-            // 3. Fetch real YOLO detections for this video
+            // 2. Fetch real YOLO detections for this video
             try {
               const dets = await api.getDetections(undefined, videoId, 5000);
               if (dets && dets.length > 0) {
@@ -260,7 +442,7 @@ export function UploadPanel() {
               console.warn('[UploadPanel] Failed to fetch detections:', dErr);
             }
 
-            // 4. Refresh alerts
+            // 3. Refresh alerts
             try {
               const latestAlerts = await api.getAlerts();
               if (latestAlerts) {
@@ -285,18 +467,24 @@ export function UploadPanel() {
       };
 
       pollTimerRef.current = setTimeout(pollVideoStatus, 800);
-    } catch (e) {
+    } catch (e: any) {
+      console.error('[ERROR] Upload error:', e);
       setStatus('ERROR');
-      setError('Upload failed. Check backend connection.');
+      const msg = e?.response?.data?.detail || e?.message || 'Upload failed. Check backend connection.';
+      setError(typeof msg === 'string' ? msg : JSON.stringify(msg));
     }
   };
 
   const reset = () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     if (pendingVideoBlob) {
-      URL.revokeObjectURL(pendingVideoBlob);
+      try { URL.revokeObjectURL(pendingVideoBlob); } catch {}
       setPendingVideoBlob(null);
     }
+    try {
+      localStorage.removeItem('shield_active_video_id');
+      localStorage.removeItem('shield_uploaded_video_name');
+    } catch {}
     setFile(null);
     setStatus('READY');
     setUploadPct(0);

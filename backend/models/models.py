@@ -43,10 +43,13 @@ class Video(Base):
     filename    = Column(String, nullable=False)
     camera_id   = Column(String, ForeignKey("cameras.id"), nullable=True)
     status      = Column(String, default="READY")    # READY|UPLOADING|PROCESSING|AI_ANALYZING|COMPLETED|ERROR
-    file_path   = Column(String, nullable=True)
-    file_size   = Column(Integer, nullable=True)
-    duration    = Column(Float,  nullable=True)
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    file_path          = Column(String, nullable=True)
+    enhanced_file_path = Column(String, nullable=True)
+    is_low_light       = Column(Boolean, default=False)
+    brightness         = Column(Float, nullable=True)
+    file_size          = Column(Integer, nullable=True)
+    duration           = Column(Float,  nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
 
     camera     = relationship("Camera",    back_populates="videos")
     detections = relationship("Detection", back_populates="video", cascade="all, delete")

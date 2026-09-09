@@ -60,7 +60,7 @@ class Detector:
     Loads yolov8n.pt and executes frame inference with high sensitivity.
     """
 
-    def __init__(self, model_path: str = "E:/IBVAP/models/yolov8n.pt", conf_threshold: float = 0.30):
+    def __init__(self, model_path: str = "E:/IBVAP/models/yolov8n.pt", conf_threshold: float = 0.25):
         # Resolve path relative to IBVAP if needed
         if not os.path.isabs(model_path):
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
