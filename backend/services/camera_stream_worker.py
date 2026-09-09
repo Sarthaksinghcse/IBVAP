@@ -76,6 +76,8 @@ class CameraStreamWorker:
         # reader paces itself to the file's own frame rate instead of reading as
         # fast as the disk allows.
         self.is_playback = (source_type == "PLAYBACK")
+        if self.is_playback:
+            self.stream_url = self._resolve_playback_path(self.stream_url)
         self.session_id = f"SESS-{uuid.uuid4().hex[:8].upper()}"
         self.session_start_time = time.time()
 
@@ -136,6 +138,35 @@ class CameraStreamWorker:
 
         # Start worker threads
         self.start()
+
+    @staticmethod
+    def _resolve_playback_path(stream_url: str) -> str:
+        """
+        Turn a stored playback path into one that exists on this machine.
+
+        Playback sources are stored relative to the application root so the same
+        database works in a checkout and inside a packaged build, where
+        electron-builder copies backend/ and storage/ side by side under
+        resourcesPath. An absolute path recorded on one developer's machine
+        would not survive either move, so relative is the supported form and
+        absolute is only honoured when it happens to exist.
+        """
+        if not stream_url:
+            return stream_url
+        if "://" in stream_url:
+            return stream_url
+        if os.path.isabs(stream_url) and os.path.exists(stream_url):
+            return stream_url
+
+        app_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidate = os.path.normpath(os.path.join(app_root, stream_url.lstrip("/\\")))
+        if os.path.exists(candidate):
+            return candidate
+
+        # Last resort: keep the original so the failure is reported against the
+        # path that was actually configured rather than a rewritten one.
+        logger.warning(f"[CameraWorker] Playback source not found: {stream_url} (tried {candidate})")
+        return stream_url
 
     def start(self):
         """Start the ingestion reader thread and the decoupled AI thread."""

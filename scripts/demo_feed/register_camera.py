@@ -48,7 +48,10 @@ def register(video_path: str, cam_id: str, name: str, location: str) -> None:
         cam.name = name
         cam.location = location
         cam.source_type = "PLAYBACK"
-        cam.stream_url = video_path.replace("\\", "/")
+        # Stored relative to the application root. An absolute path would not
+        # survive being packaged (electron-builder relocates storage/ under
+        # resourcesPath) or being opened on another machine.
+        cam.stream_url = os.path.relpath(video_path, _REPO_ROOT).replace("\\", "/")
         cam.stream_type = "MJPEG"
         cam.status = "ONLINE"
         cam.ai_status = "STOPPED"     # overlays are pre-rendered, not live
