@@ -70,6 +70,12 @@ class CameraStreamWorker:
         self.conf_threshold = conf_threshold
         self.rotation = int(rotation)  # 0, 90, 180, 270
         self.is_usb = (source_type == "USB_PHONE")
+        # PLAYBACK serves a video file on disk as if it were a live camera. The
+        # file is already annotated, so the AI loop stays off (running YOLO again
+        # would draw a second set of boxes on top of the rendered ones) and the
+        # reader paces itself to the file's own frame rate instead of reading as
+        # fast as the disk allows.
+        self.is_playback = (source_type == "PLAYBACK")
         self.session_id = f"SESS-{uuid.uuid4().hex[:8].upper()}"
         self.session_start_time = time.time()
 
@@ -139,13 +145,19 @@ class CameraStreamWorker:
             name=f"Reader-{self.camera_id}",
             daemon=True
         )
-        self._ai_thread = threading.Thread(
-            target=self._ai_loop,
-            name=f"AI-{self.camera_id}",
-            daemon=True
-        )
         self._reader_thread.start()
-        self._ai_thread.start()
+
+        # A playback feed is already annotated, so there is nothing for the AI
+        # loop to add and every reason not to spend a core on it.
+        if self.is_playback:
+            self._ai_thread = None
+        else:
+            self._ai_thread = threading.Thread(
+                target=self._ai_loop,
+                name=f"AI-{self.camera_id}",
+                daemon=True
+            )
+            self._ai_thread.start()
         logger.info(f"[CameraWorker] Started stream worker for {self.camera_id} -> {self.stream_url} (rotation={self.rotation} deg)")
 
     def stop(self):
@@ -207,6 +219,15 @@ class CameraStreamWorker:
         consecutive_failures = 0
         last_log_time = time.time()
 
+        # Playback pacing: a file would otherwise be consumed as fast as it can
+        # be decoded, and the demo would race past at several hundred FPS.
+        playback_interval = 0.0
+        next_frame_due = time.time()
+        if self.is_playback:
+            src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            playback_interval = 1.0 / max(src_fps, 1.0)
+            logger.info(f"[CameraWorker] Playback mode for {self.camera_id} at {src_fps:.2f} fps")
+
         while not self._stopped:
             if not cap.isOpened():
                 time.sleep(0.5)
@@ -214,8 +235,22 @@ class CameraStreamWorker:
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 continue
 
+            if playback_interval:
+                sleep_for = next_frame_due - time.time()
+                if sleep_for > 0:
+                    time.sleep(min(sleep_for, 0.25))
+                next_frame_due = max(next_frame_due + playback_interval, time.time())
+
             ret, frame = cap.read()
             now = time.time()
+
+            # A file that has run out is not a failure — rewind and keep serving,
+            # so the demo feed loops seamlessly instead of stalling for a second
+            # and then re-opening the capture.
+            if self.is_playback and (not ret or frame is None):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = cap.read()
+                now = time.time()
 
             if not ret or frame is None or frame.size == 0:
                 consecutive_failures += 1
@@ -747,7 +782,10 @@ class CameraStreamWorker:
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
 
                 # Smooth pacing ~25 FPS
-                time.sleep(0.04)
+                # Live cameras are deliberately capped at ~25 fps to bound CPU.
+                # A playback feed is already paced by the reader thread at the
+                # file's own frame rate, so this cap only costs smoothness.
+                time.sleep(0.005 if self.is_playback else 0.04)
 
         except GeneratorExit:
             pass

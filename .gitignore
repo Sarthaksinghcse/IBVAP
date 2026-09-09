@@ -15,3 +15,6 @@ __pycache__/
 
 .tmp/
 scratch/
+
+# Ultralytics auto-downloads weights into the CWD; models/ is the real home
+*.pt
