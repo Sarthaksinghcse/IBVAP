@@ -25,6 +25,9 @@ export interface AppSettings {
   faceRecognitionEnabled: boolean;
   faceMatchThreshold: number;
   anprEnabled: boolean;
+  // Acoustic alert when a person is inside a restricted zone. Read by
+  // CCTVPanel; defaults to on when unset.
+  personBeep?: boolean;
 }
 
 

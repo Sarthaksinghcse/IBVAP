@@ -198,6 +198,11 @@ export interface VideoAnalysisStatus {
   detections: number;
   tracks: number;
   events: number;
+  // Low-light enhancement fields, returned by GET /api/videos/{id}/analysis-status
+  low_light?: boolean;
+  brightness?: number;
+  raw_video_url?: string | null;
+  enhanced_video_url?: string | null;
   error?: string | null;
 }
 

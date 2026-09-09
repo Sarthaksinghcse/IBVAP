@@ -43,7 +43,11 @@ export type EventType =
   | 'FACE_DETECTED'
   | 'PLATE_DETECTED'
   | 'UNREADABLE_PLATE'
-  | 'WATCHLIST_PLATE_MATCH';
+  | 'WATCHLIST_PLATE_MATCH'
+  // The backend derives event names from COCO classes, so the set is open:
+  // ANIMAL_DETECTED, DOG_DETECTED, OBJECT_DETECTED, UNKNOWN_DETECTED and
+  // friends are all produced by threat_engine.correlate_threat.
+  | (string & {});
 
 export type ObjectType = 'PERSON' | 'VEHICLE' | 'ANIMAL' | 'UNKNOWN';
 
@@ -169,7 +173,7 @@ export interface ANPRPlateInfo {
   plate_detected: boolean;
   plate_text?: string | null;
   plate_confidence?: number | null;
-  plate_status: 'READABLE' | 'UNREADABLE' | 'UNCERTAIN' | 'NOT_DETECTED';
+  plate_status: 'READABLE' | 'UNREADABLE' | 'UNCERTAIN' | 'NOT_DETECTED' | 'READING';
   plate_bbox?: BoundingBox | null;
   vehicle_type?: string;
 }
@@ -235,6 +239,9 @@ export interface Video {
   camera_id?: string;
   status: VideoStatus;
   file_path?: string;
+  enhanced_file_path?: string | null;
+  is_low_light?: boolean;
+  brightness?: number;
   file_size?: number;
   duration?: number;
   created_at: string;
@@ -293,7 +300,7 @@ export interface SystemStatusData {
 // ─── WebSocket Message ────────────────────────────────────────────────────────
 
 export interface WSMessage {
-  type: 'ALERT' | 'ALERT_UPDATE' | 'DETECTION' | 'SYSTEM' | 'VIDEO_PROGRESS' | 'VIDEO_STATUS';
+  type: 'ALERT' | 'ALERT_UPDATE' | 'DETECTION' | 'ANPR_EVENT' | 'SYSTEM' | 'VIDEO_PROGRESS' | 'VIDEO_STATUS';
   data: any;
   timestamp?: string;
 }
@@ -335,7 +342,7 @@ export interface ANPREvent {
   vehicle_type: string;
   plate_text?: string | null;
   plate_confidence?: number | null;
-  plate_status: 'READABLE' | 'UNREADABLE' | 'UNCERTAIN' | 'NOT_DETECTED';
+  plate_status: 'READABLE' | 'UNREADABLE' | 'UNCERTAIN' | 'NOT_DETECTED' | 'READING';
   video_time_sec?: number | null;
   snapshot_path?: string | null;
   timestamp: string;
@@ -393,3 +400,79 @@ export interface LoginWebcamPayload {
 
 
 
+
+// ─── USB Phone Camera (ADB) ───────────────────────────────────────────────────
+// Mirrors backend/services/usb_phone_manager.py and the /api/cameras/usb/*
+// routes. These were defined on abhay-latest-project but lost when the merge
+// took main's copy of this file, leaving api.ts importing names that no longer
+// existed and the whole frontend failing to typecheck.
+
+export interface USBDeviceItem {
+  serial: string;
+  state: string;
+  model: string;
+  product?: string;
+  usb_info?: string;
+  authorized: boolean;
+}
+
+export interface USBHardwareItem {
+  name: string;
+  instance_id?: string;
+  status?: string;
+}
+
+export interface USBDetectResponse {
+  adb_available: boolean;
+  adb_path?: string | null;
+  devices: USBDeviceItem[];
+  pnp_hardware_detected: USBHardwareItem[];
+  instructions: string[];
+}
+
+export interface USBTestRequest {
+  phone_port?: number;
+  local_port?: number;
+  stream_path?: string;
+  device_serial?: string;
+  auto_find_port?: boolean;
+}
+
+export interface USBTestResponse {
+  success: boolean;
+  message: string;
+  local_port?: number;
+  phone_port?: number;
+  resolution?: string;
+  stream_url?: string;
+  adb_forwarded: boolean;
+  frames_received?: boolean;
+}
+
+export interface USBConnectRequest {
+  name: string;
+  location?: string;
+  device_serial?: string;
+  phone_port?: number;
+  local_port?: number;
+  stream_path?: string;
+  app_type?: string;
+  auto_find_port?: boolean;
+}
+
+export interface USBFindPortResponse {
+  available_port: number;
+  preferred_port: number;
+}
+
+export interface USBStatusResponse {
+  connected: boolean;
+  device_count: number;
+  active_forwards: Array<{
+    serial?: string;
+    local_port: number;
+    phone_port: number;
+    forwarded_at: number;
+  }>;
+  adb_available: boolean;
+}

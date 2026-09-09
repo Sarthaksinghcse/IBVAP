@@ -266,8 +266,7 @@ function checkPython() {
     path.join(process.resourcesPath, '..'),
     path.join(process.resourcesPath, '..', '..', '..', '..'),
     process.cwd(),
-    path.join(process.cwd(), '..'),
-    'C:\\Users\\thaku\\OneDrive\\Desktop\\IBVAP'
+    path.join(process.cwd(), '..')
   ];
 
   for (const root of candidateRoots) {
