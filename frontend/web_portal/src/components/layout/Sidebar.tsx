@@ -4,7 +4,6 @@ import {
   Activity, Settings, UserCheck
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
-import logoImg from '../../assets/shield_logo.png';
 
 // ─── Nav Items Definition ─────────────────────────────────────────────────────
 
@@ -38,7 +37,7 @@ export function Sidebar() {
       {/* ── Brand Header ─────────────────────────────────────────────── */}
       <div className="px-4 py-4 flex items-center gap-3 border-b border-[#272b37] light:border-[#d9dde3]">
         <img
-          src={logoImg}
+          src="/shield_logo.png"
           alt="SHIELD Logo"
           className="w-8 h-8 object-contain drop-shadow-md flex-shrink-0"
         />
@@ -94,17 +93,18 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* ── Sidebar Footer / Official Emblem & AI Status ──────────────── */}
+      {/* ── Sidebar Footer / Emblem & AI Status ──────────────────────── */}
       <div className="p-3 border-t border-[#272b37] light:border-[#d9dde3] flex flex-col items-center text-center">
-        <div className="relative mb-2 group cursor-default">
-          <img
-            src={logoImg}
-            alt="SHIELD Official Emblem"
-            className="w-12 h-12 object-contain drop-shadow-lg transition-transform duration-200 group-hover:scale-105"
-          />
+        <img
+          src="/shield_logo.png"
+          alt="SHIELD"
+          className="w-10 h-10 object-contain mb-1 opacity-90 hover:opacity-100 transition-opacity"
+        />
+        <div className="text-[11px] font-bold font-mono tracking-widest text-white light:text-slate-900">
+          SHIELD
         </div>
-        <div className="text-[9px] text-[#62697b] light:text-slate-400 font-mono mb-2 tracking-wide">
-          OPERATIONAL · v2.0
+        <div className="text-[9px] text-[#62697b] light:text-slate-400 font-mono mb-2">
+          v2.0.0
         </div>
 
         {/* AI Engine Status Pill */}

@@ -1,5 +1,6 @@
 import { format } from 'date-fns';
-import { Camera, WifiOff, Cpu, Clock, ShieldAlert, Video, Smartphone, Trash2, Radio } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Camera, WifiOff, Cpu, Clock, ShieldAlert, Video, Smartphone, Trash2, Radio, Usb, Play } from 'lucide-react';
 import { CameraStatusBadge, AIStatusBadge } from '../ui/Badge';
 import { useStore } from '../../store/useStore';
 import type { Camera as CameraType } from '../../types';
@@ -14,9 +15,22 @@ interface CameraCardProps {
 }
 
 export function CameraCard({ camera, isSelected, onClick, onConfigureZone, onDelete, onTest }: CameraCardProps) {
+  const navigate = useNavigate();
   const isOnline = camera.status === 'ONLINE';
   const isRunning = camera.ai_status === 'RUNNING';
   const zones = useStore((s) => s.zones);
+  const setSelectedCamera = useStore((s) => s.setSelectedCamera);
+  const setCameraMode = useStore((s) => s.setCameraMode);
+  const setActiveVideoId = useStore((s) => s.setActiveVideoId);
+
+  const handleWatchStream = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedCamera(camera.id);
+    setCameraMode(false);
+    setActiveVideoId(null);
+    if (onClick) onClick();
+    navigate('/');
+  };
 
   const cameraZone = zones[camera.id];
   const hasZone = Boolean(
@@ -38,8 +52,9 @@ export function CameraCard({ camera, isSelected, onClick, onConfigureZone, onDel
     >
       {/* Camera "thumbnail" / Live stream preview */}
       <div
-        onClick={onClick}
-        className="relative h-32 bg-black flex items-center justify-center cursor-pointer select-none overflow-hidden"
+        onClick={handleWatchStream}
+        className="relative h-32 bg-black flex items-center justify-center cursor-pointer select-none overflow-hidden group"
+        title="Click to Watch Live Stream"
       >
 
         {/* Status overlay for offline/maintenance */}
@@ -67,6 +82,13 @@ export function CameraCard({ camera, isSelected, onClick, onConfigureZone, onDel
             <div className="cctv-vignette pointer-events-none" />
             <div className="cctv-scanline pointer-events-none" />
 
+            {/* Hover Play Overlay */}
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-15 pointer-events-none">
+              <div className="w-10 h-10 rounded-full bg-[#22c55e]/90 text-white flex items-center justify-center shadow-lg">
+                <Play size={18} className="fill-white ml-0.5" />
+              </div>
+            </div>
+
             {/* Render real zone geometry if configured */}
             {hasZone && (
               <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full pointer-events-none z-5">
@@ -86,15 +108,33 @@ export function CameraCard({ camera, isSelected, onClick, onConfigureZone, onDel
         <div className="absolute top-2 left-2 flex items-center gap-1.5 z-10">
           <span
             className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase border flex items-center gap-1 ${
-              sourceType === 'WEBCAM'
+              sourceType === 'USB_PHONE'
+                ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                : sourceType === 'WEBCAM'
                 ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
                 : sourceType === 'PHONE'
                 ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
                 : 'bg-blue-500/20 border-blue-500/40 text-blue-400'
             }`}
           >
-            {sourceType === 'WEBCAM' ? <Camera size={9} /> : sourceType === 'PHONE' ? <Smartphone size={9} /> : <Video size={9} />}
-            {sourceType === 'PHONE' ? 'PHONE / WIFI' : sourceType === 'WEBCAM' ? 'LAPTOP WEBCAM' : 'CCTV'}
+            {sourceType === 'USB_PHONE' ? (
+              <Usb size={9} />
+            ) : sourceType === 'WEBCAM' ? (
+              <Camera size={9} />
+            ) : sourceType === 'PHONE' ? (
+              <Smartphone size={9} />
+            ) : (
+              <Video size={9} />
+            )}
+            {sourceType === 'USB_PHONE'
+              ? 'USB PHONE'
+              : sourceType === 'PHONE'
+              ? 'PHONE / WIFI'
+              : sourceType === 'WEBCAM'
+              ? 'LAPTOP WEBCAM'
+              : sourceType === 'PLAYBACK'
+              ? 'RECORDED FEED'
+              : 'CCTV'}
           </span>
 
           {isOnline && isRunning && (
@@ -186,6 +226,16 @@ export function CameraCard({ camera, isSelected, onClick, onConfigureZone, onDel
           </div>
 
           <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleWatchStream}
+              title="Watch Live Stream"
+              className="px-2 py-1 rounded bg-[#22c55e]/15 light:bg-emerald-50 hover:bg-[#22c55e]/25 light:hover:bg-emerald-100 text-[#22c55e] light:text-[#15803d] border border-[#22c55e]/30 light:border-emerald-300 transition-all cursor-pointer font-mono text-[10px] font-semibold flex items-center gap-1"
+            >
+              <Video size={11} />
+              <span>Watch Stream</span>
+            </button>
+
             {onTest && camera.stream_url && (
               <button
                 type="button"

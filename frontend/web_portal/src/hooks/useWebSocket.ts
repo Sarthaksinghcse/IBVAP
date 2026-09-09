@@ -4,7 +4,7 @@ import { wsService } from '../services/websocket';
 import { MockAIEngine } from '../services/mock/mockEngine';
 import * as api from '../services/api';
 import type { WSMessage } from '../types';
-import { playAlertChime, announceVoiceAlert, playRestrictedZonePersonBeep } from '../utils/audio';
+import { playAlertChime, announceVoiceAlert } from '../utils/audio';
 
 
 /**
@@ -55,22 +55,14 @@ export function useWebSocket() {
 
           const currentSettings = useStore.getState().settings;
 
-          // Multi-Modal Alerting (SIH Differentiator 3)
-          if (alertData.threat_level === 'CRITICAL') {
+          // Multi-Modal Alerting (SIH Differentiator 3) - Trigger on both CRITICAL and HIGH alerts
+          if (alertData.threat_level === 'CRITICAL' || alertData.threat_level === 'HIGH') {
             if (currentSettings.alertSound) {
               playAlertChime();
             }
             if (currentSettings.voiceAlerts ?? true) {
               announceVoiceAlert(alertData);
             }
-          }
-
-          // Restricted zone person intrusion acoustic alert
-          const isPersonZoneIntrusion =
-            alertData.object_type === 'PERSON' &&
-            (alertData.event_type === 'ZONE_INTRUSION' || alertData.threat_level === 'CRITICAL' || alertData.threat_level === 'HIGH');
-          if (isPersonZoneIntrusion && (currentSettings.personBeep ?? true)) {
-            playRestrictedZonePersonBeep();
           }
 
           // Auto-Acknowledge Low Alerts setting
@@ -91,13 +83,31 @@ export function useWebSocket() {
           break;
         case 'DETECTION': {
           const det = msg.data as Parameters<typeof addDetection>[0];
+          console.log('[UI] detection received:', det.object_id, `${det.confidence}%`, det.event_type);
           addDetection(det);
-          const currentSettings = useStore.getState().settings;
-          const isPersonInZone =
-            det.object_type === 'PERSON' &&
-            (det.is_in_restricted_zone || det.event_type === 'ZONE_INTRUSION');
-          if (isPersonInZone && (currentSettings.personBeep ?? true)) {
-            playRestrictedZonePersonBeep();
+          break;
+        }
+        case 'ANPR_EVENT': {
+          const anpr = msg.data as any;
+          if (anpr) {
+            addDetection({
+              id: anpr.id || `anpr-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+              camera_id: anpr.camera_id,
+              video_id: anpr.video_id,
+              object_type: anpr.vehicle_type || 'VEHICLE',
+              object_id: anpr.vehicle_label || `Vehicle Track #${anpr.vehicle_track_id}`,
+              confidence: anpr.plate_confidence || 85.0,
+              event_type: anpr.plate_status === 'READABLE' ? 'PLATE_DETECTED' : 'UNREADABLE_PLATE',
+              bbox: anpr.bbox || { x: 0, y: 0, w: 0, h: 0 },
+              timestamp: anpr.timestamp || new Date().toISOString(),
+              video_time_sec: anpr.video_time_sec,
+              plate_info: {
+                plate_detected: true,
+                plate_text: anpr.plate_text,
+                plate_confidence: anpr.plate_confidence,
+                plate_status: anpr.plate_status,
+              }
+            });
           }
           break;
         }
@@ -127,9 +137,6 @@ export function useWebSocket() {
             events: p.events,
             status: p.status,
           });
-          if (p.status === 'PROCESSING' || p.status === 'AI_ANALYZING') {
-            setSystemStatus({ ai_engine_status: 'RUNNING', fps: p.fps || 25.0 });
-          }
           break;
         }
         case 'VIDEO_STATUS': {

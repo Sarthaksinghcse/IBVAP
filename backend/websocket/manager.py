@@ -19,6 +19,11 @@ class ConnectionManager:
 
     def __init__(self):
         self.active_connections: List[WebSocket] = []
+        self.loop = None
+
+    def set_loop(self, loop):
+        self.loop = loop
+        logger.info(f"[WS] Main event loop registered: {loop}")
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -43,8 +48,15 @@ class ConnectionManager:
             self.disconnect(ws)
 
     def broadcast_sync(self, message: dict):
-        """Thread-safe synchronous broadcast dispatch."""
+        """Thread-safe synchronous broadcast dispatch callable from worker threads."""
         import asyncio
+        if self.loop is not None and self.loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(self.broadcast(message), self.loop)
+                return
+            except Exception as e:
+                logger.debug(f"[WS] broadcast_sync run_coroutine_threadsafe failed: {e}")
+
         try:
             loop = asyncio.get_running_loop()
             asyncio.run_coroutine_threadsafe(self.broadcast(message), loop)

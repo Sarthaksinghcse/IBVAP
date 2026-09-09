@@ -8,7 +8,6 @@ import type {
   AlertStatus,
   Zone,
   WatchlistPerson,
-  AuthUser,
 } from '../types';
 import * as api from '../services/api';
 
@@ -18,7 +17,6 @@ export interface AppSettings {
   showConfidence: boolean;
   alertSound: boolean;
   voiceAlerts: boolean;
-  personBeep?: boolean;
   autoAcknowledge: boolean;
   aiThreshold: number;
   loiteringThreshold: number;
@@ -37,9 +35,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   showConfidence: true,
   alertSound: true,
   voiceAlerts: true,
-  personBeep: true,
   autoAcknowledge: false,
-  aiThreshold: 50,
+  aiThreshold: 30,
   loiteringThreshold: 15,
   storageRetention: 30,
   faceRecognitionEnabled: true,
@@ -49,23 +46,6 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 
 
-
-const DEFAULT_ZONES: Record<string, Zone> = {
-  'WEBCAM-01': {
-    id: 'zone-default-webcam-01',
-    source_id: 'WEBCAM-01',
-    source_type: 'WEBCAM',
-    name: 'Restricted Zone A',
-    coordinates: [
-      [30, 15],
-      [92, 15],
-      [92, 90],
-      [30, 90],
-    ],
-    enabled: true,
-    zone_type: 'RESTRICTED',
-  },
-};
 
 const loadSettingsFromStorage = (): AppSettings => {
   try {
@@ -101,6 +81,9 @@ interface IBVAPState {
   activeVideoId: string | null;
   uploadedVideoName: string | null;
   pendingVideoBlob: string | null;
+  enhancedVideoUrl: string | null;
+  isLowLightVideo: boolean;
+  videoViewMode: 'ENHANCED' | 'ORIGINAL';
   videoAnalysisMetrics: {
     progress: number;
     currentFrame: number;
@@ -110,20 +93,15 @@ interface IBVAPState {
     tracks: number;
     events: number;
     status: string;
+    low_light?: boolean;
+    brightness?: number;
+    raw_video_url?: string | null;
+    enhanced_video_url?: string | null;
   } | null;
   timeZone: string;
   timeFormat: '12h' | '24h';
   theme: 'dark' | 'light' | 'system';
   readAlertIds: string[];
-
-  // --- Face Authentication State ---
-  currentUser: AuthUser | null;
-  token: string | null;
-  isAuthenticated: boolean;
-  isAuthChecking: boolean;
-  login: (token: string, user: AuthUser) => void;
-  logout: () => void;
-  initAuth: () => Promise<void>;
 
   // --- Settings Action ---
   updateSetting: <K extends keyof AppSettings>(key: K, val: AppSettings[K]) => void;
@@ -132,6 +110,9 @@ interface IBVAPState {
   setTheme: (theme: 'dark' | 'light' | 'system') => void;
   markAlertRead: (id: string) => void;
   markAllAlertsRead: () => void;
+  setEnhancedVideoUrl: (url: string | null) => void;
+  setIsLowLightVideo: (v: boolean) => void;
+  setVideoViewMode: (mode: 'ENHANCED' | 'ORIGINAL') => void;
   setVideoAnalysisMetrics: (metrics: Partial<{
     progress: number;
     currentFrame: number;
@@ -141,6 +122,10 @@ interface IBVAPState {
     tracks: number;
     events: number;
     status: string;
+    low_light?: boolean;
+    brightness?: number;
+    raw_video_url?: string | null;
+    enhanced_video_url?: string | null;
   }> | null) => void;
 
 
@@ -227,7 +212,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
   alerts: [],
   detections: [],
   cameras: [],
-  zones: { ...DEFAULT_ZONES },
+  zones: {},
   watchlist: [],
   activeTracksBySource: {},
   analytics: null,
@@ -255,80 +240,47 @@ export const useStore = create<IBVAPState>((set, get) => ({
   uploadProgress: 0,
   uploadStatus: null,
   activeVideoUrl: null,
-  activeVideoId: null,
-  uploadedVideoName: null,
+  activeVideoId: (() => {
+    try { return localStorage.getItem('shield_active_video_id') || null; } catch { return null; }
+  })(),
+  uploadedVideoName: (() => {
+    try { return localStorage.getItem('shield_uploaded_video_name') || null; } catch { return null; }
+  })(),
   pendingVideoBlob: null,
+  enhancedVideoUrl: null,
+  isLowLightVideo: false,
+  videoViewMode: 'ENHANCED',
   videoAnalysisMetrics: null,
 
-  // --- Face Authentication State & Methods ---
-  currentUser: null,
-  token: typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null,
-  isAuthenticated: false,
-  isAuthChecking: true,
-
-  login: (token: string, user: AuthUser) => {
-    localStorage.setItem('ibvap_token', token);
-    localStorage.setItem('ibvap_user', JSON.stringify(user));
-    set({ token, currentUser: user, isAuthenticated: true, isAuthChecking: false });
-  },
-
-  logout: () => {
-    localStorage.removeItem('ibvap_token');
-    localStorage.removeItem('ibvap_user');
-    set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
-  },
-
-  initAuth: async () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null;
-    const cachedUser = typeof window !== 'undefined' ? localStorage.getItem('ibvap_user') : null;
-
-    if (!token) {
-      set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
-      return;
-    }
-
-    if (cachedUser) {
-      try {
-        const user = JSON.parse(cachedUser);
-        set({ token, currentUser: user, isAuthenticated: true, isAuthChecking: false });
-      } catch (e) {
-        // Cached parse failed, continue to network fetch
-      }
-    }
-
-    try {
-      const verifiedUser = await api.getMe();
-      localStorage.setItem('ibvap_user', JSON.stringify(verifiedUser));
-      set({ token, currentUser: verifiedUser, isAuthenticated: true, isAuthChecking: false });
-    } catch (err: any) {
-      console.warn('[useStore] Token verification failed:', err);
-      if (err?.response?.status === 401 || err?.response?.status === 403) {
-        localStorage.removeItem('ibvap_token');
-        localStorage.removeItem('ibvap_user');
-        set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
-      } else {
-        // Network failure; retain cached session if present
-        set({ isAuthChecking: false });
-      }
-    }
-  },
-
+  setEnhancedVideoUrl: (enhancedVideoUrl) => set({ enhancedVideoUrl }),
+  setIsLowLightVideo: (isLowLightVideo) => set({ isLowLightVideo }),
+  setVideoViewMode: (videoViewMode) => set({ videoViewMode }),
 
   setVideoAnalysisMetrics: (metrics) => {
-    set((state) => ({
-      videoAnalysisMetrics: metrics
-        ? {
-            progress: metrics.progress ?? state.videoAnalysisMetrics?.progress ?? 0,
-            currentFrame: metrics.currentFrame ?? state.videoAnalysisMetrics?.currentFrame ?? 0,
-            totalFrames: metrics.totalFrames ?? state.videoAnalysisMetrics?.totalFrames ?? 0,
-            fps: metrics.fps ?? state.videoAnalysisMetrics?.fps ?? 25.0,
-            detections: metrics.detections ?? state.videoAnalysisMetrics?.detections ?? 0,
-            tracks: metrics.tracks ?? state.videoAnalysisMetrics?.tracks ?? 0,
-            events: metrics.events ?? state.videoAnalysisMetrics?.events ?? 0,
-            status: metrics.status ?? state.videoAnalysisMetrics?.status ?? 'PROCESSING',
-          }
-        : null,
-    }));
+    set((state) => {
+      const low_light = metrics?.low_light ?? state.videoAnalysisMetrics?.low_light ?? false;
+      const enhanced_url = metrics?.enhanced_video_url ?? state.videoAnalysisMetrics?.enhanced_video_url ?? null;
+      return {
+        isLowLightVideo: low_light,
+        enhancedVideoUrl: enhanced_url ?? state.enhancedVideoUrl,
+        videoAnalysisMetrics: metrics
+          ? {
+              progress: metrics.progress ?? state.videoAnalysisMetrics?.progress ?? 0,
+              currentFrame: metrics.currentFrame ?? state.videoAnalysisMetrics?.currentFrame ?? 0,
+              totalFrames: metrics.totalFrames ?? state.videoAnalysisMetrics?.totalFrames ?? 0,
+              fps: metrics.fps ?? state.videoAnalysisMetrics?.fps ?? 25.0,
+              detections: metrics.detections ?? state.videoAnalysisMetrics?.detections ?? 0,
+              tracks: metrics.tracks ?? state.videoAnalysisMetrics?.tracks ?? 0,
+              events: metrics.events ?? state.videoAnalysisMetrics?.events ?? 0,
+              status: metrics.status ?? state.videoAnalysisMetrics?.status ?? 'PROCESSING',
+              low_light: low_light,
+              brightness: metrics.brightness ?? state.videoAnalysisMetrics?.brightness ?? 0.0,
+              raw_video_url: metrics.raw_video_url ?? state.videoAnalysisMetrics?.raw_video_url ?? null,
+              enhanced_video_url: enhanced_url,
+            }
+          : null,
+      };
+    });
   },
 
   timeZone: (() => {
@@ -418,7 +370,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
 
   // --- Zone Actions ---
   setZones: (zoneList) => {
-    const zoneMap: Record<string, Zone> = { ...DEFAULT_ZONES };
+    const zoneMap: Record<string, Zone> = {};
     for (const z of zoneList) {
       zoneMap[z.source_id] = z;
     }
@@ -448,7 +400,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
   fetchZones: async () => {
     try {
       const data = await api.getZones();
-      const zoneMap: Record<string, Zone> = { ...DEFAULT_ZONES };
+      const zoneMap: Record<string, Zone> = {};
       for (const z of data) {
         zoneMap[z.source_id] = z;
       }
@@ -502,7 +454,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
     })),
 
   // --- Detection Actions ---
-  setDetections: (detections) => set({ detections }),
+  setDetections: (detections) => set({ detections: (detections || []).slice(0, 500) }),
   addDetection: (detection) =>
     set((state) => ({
       detections: [detection, ...state.detections].slice(0, 500),
@@ -526,10 +478,25 @@ export const useStore = create<IBVAPState>((set, get) => ({
   fetchCameras: async () => {
     try {
       const cams = await api.getCameras();
-      set((state) => ({
+      const currentSelected = get().selectedCameraId;
+      const targetCamId = currentSelected || (cams.length > 0 ? cams[0].id : '');
+      set({
         cameras: cams,
-        selectedCameraId: state.selectedCameraId || (cams.length > 0 ? cams[0].id : ''),
-      }));
+        selectedCameraId: targetCamId,
+      });
+      if (targetCamId) {
+        api.getDetections(targetCamId, undefined, 100)
+          .then((dets) => {
+            if (dets && dets.length > 0) {
+              set((state) => {
+                const existingIds = new Set(state.detections.map((d) => d.id));
+                const newDets = dets.filter((d) => !existingIds.has(d.id));
+                return { detections: [...newDets, ...state.detections].slice(0, 500) };
+              });
+            }
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       console.warn('[useStore] Failed to fetch cameras:', e);
     }
@@ -568,13 +535,40 @@ export const useStore = create<IBVAPState>((set, get) => ({
     set({ wsConnected }),
 
   // --- UI Actions ---
-  setSelectedCamera: (selectedCameraId) => set({ selectedCameraId }),
+  setSelectedCamera: (selectedCameraId) => {
+    set({ selectedCameraId });
+    if (selectedCameraId) {
+      api.getDetections(selectedCameraId, undefined, 100)
+        .then((dets) => {
+          if (dets && dets.length > 0) {
+            set((state) => {
+              const existingIds = new Set(state.detections.map((d) => d.id));
+              const newDets = dets.filter((d) => !existingIds.has(d.id));
+              return { detections: [...newDets, ...state.detections].slice(0, 500) };
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  },
   setSelectedAlert: (selectedAlertId) => set({ selectedAlertId }),
   setUploadProgress: (uploadProgress) => set({ uploadProgress }),
   setUploadStatus: (uploadStatus) => set({ uploadStatus }),
   setActiveVideoUrl: (activeVideoUrl) => set({ activeVideoUrl }),
-  setActiveVideoId: (activeVideoId) => set({ activeVideoId }),
-  setUploadedVideoName: (uploadedVideoName) => set({ uploadedVideoName }),
+  setActiveVideoId: (activeVideoId) => {
+    try {
+      if (activeVideoId) localStorage.setItem('shield_active_video_id', activeVideoId);
+      else localStorage.removeItem('shield_active_video_id');
+    } catch {}
+    set({ activeVideoId });
+  },
+  setUploadedVideoName: (uploadedVideoName) => {
+    try {
+      if (uploadedVideoName) localStorage.setItem('shield_uploaded_video_name', uploadedVideoName);
+      else localStorage.removeItem('shield_uploaded_video_name');
+    } catch {}
+    set({ uploadedVideoName });
+  },
   setPendingVideoBlob: (pendingVideoBlob) => set({ pendingVideoBlob }),
 
   // --- Browser Camera Actions ---
@@ -766,8 +760,11 @@ export const getActiveCamerasCount = (
   activeCameraStream: MediaStream | null
 ): number => {
   const webcamConnected = isWebcamStreamConnected(isWebcamActive, activeCameraStream) ? 1 : 0;
+  // A PLAYBACK source serves a pre-analysed recording, so its AI loop is
+  // deliberately stopped. It is still an online feed delivering analysed video
+  // and belongs in this count.
   const onlineAiCctvCount = cameras.filter(
-    (c) => c.status === 'ONLINE' && c.ai_status === 'RUNNING'
+    (c) => c.status === 'ONLINE' && (c.ai_status === 'RUNNING' || c.source_type === 'PLAYBACK')
   ).length;
   return onlineAiCctvCount + webcamConnected;
 };

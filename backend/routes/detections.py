@@ -13,16 +13,23 @@ router = APIRouter()
 
 @router.get("/", response_model=List[DetectionResponse])
 def get_detections(
-    camera_id: Optional[str] = None,
-    video_id:  Optional[str] = None,
-    limit:     int = 5000,
+    camera_id:  Optional[str] = None,
+    video_id:   Optional[str] = None,
+    session_id: Optional[str] = None,
+    limit:      int = 5000,
     db: Session = Depends(get_db),
 ):
+    if not camera_id and not video_id:
+        # Require camera_id or video_id to avoid dumping unassociated/stale historical detections
+        return []
+
     q = db.query(Detection)
     if camera_id:
         q = q.filter(Detection.camera_id == camera_id)
     if video_id:
         q = q.filter(Detection.video_id == video_id)
+    if session_id:
+        q = q.filter(Detection.session_id == session_id)
     
     # Chronological if specific to a video, newest first for live camera
     if video_id:
@@ -115,6 +122,7 @@ def _to_response(
         "id":                    det.id,
         "camera_id":             det.camera_id,
         "video_id":              det.video_id,
+        "session_id":            det.session_id,
         "object_type":           det.object_type,
         "object_id":             det.object_id,
         "confidence":            det.confidence,

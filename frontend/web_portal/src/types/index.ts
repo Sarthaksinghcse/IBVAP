@@ -144,7 +144,10 @@ export interface BoundingBox {
   h: number; // % of frame height
 }
 
-export type CameraSourceType = 'CCTV' | 'PHONE' | 'WEBCAM';
+// Must stay in step with Camera.source_type in backend/models/models.py.
+// USB_PHONE and PLAYBACK are both served by the backend but were missing here,
+// so they fell through to the 'CCTV' fallback in CameraCard.
+export type CameraSourceType = 'CCTV' | 'PHONE' | 'WEBCAM' | 'USB_PHONE' | 'PLAYBACK';
 
 export interface Camera {
   id: string;

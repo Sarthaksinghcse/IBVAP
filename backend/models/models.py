@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Float, DateTime, Text, ForeignKey, Boolean, LargeBinary
+from sqlalchemy import Column, String, Integer, Float, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from database.database import Base
 from datetime import datetime
@@ -17,13 +17,14 @@ class Camera(Base):
     id            = Column(String, primary_key=True, default=_uid)
     name          = Column(String, nullable=False, unique=True, index=True)
     location      = Column(String, nullable=False, default="Surveillance Area")
-    source_type   = Column(String, default="CCTV")         # CCTV | PHONE | WEBCAM
+    source_type   = Column(String, default="CCTV")         # CCTV | PHONE | WEBCAM | USB_PHONE
     stream_url    = Column(String, nullable=True)          # rtsp://... | http://...
     stream_type   = Column(String, default="RTSP")         # RTSP | MJPEG | HTTP | WEBCAM
     status        = Column(String, default="ONLINE")       # ONLINE | OFFLINE | ERROR
     ai_status     = Column(String, default="STOPPED")      # RUNNING | STOPPED | ERROR
     fps           = Column(Float,  default=25.0)
     resolution    = Column(String, default="1920x1080")
+    rotation      = Column(Integer, default=0)             # 0 | 90 | 180 | 270
     last_activity = Column(DateTime, default=datetime.utcnow)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
@@ -42,10 +43,13 @@ class Video(Base):
     filename    = Column(String, nullable=False)
     camera_id   = Column(String, ForeignKey("cameras.id"), nullable=True)
     status      = Column(String, default="READY")    # READY|UPLOADING|PROCESSING|AI_ANALYZING|COMPLETED|ERROR
-    file_path   = Column(String, nullable=True)
-    file_size   = Column(Integer, nullable=True)
-    duration    = Column(Float,  nullable=True)
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    file_path          = Column(String, nullable=True)
+    enhanced_file_path = Column(String, nullable=True)
+    is_low_light       = Column(Boolean, default=False)
+    brightness         = Column(Float, nullable=True)
+    file_size          = Column(Integer, nullable=True)
+    duration           = Column(Float,  nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
 
     camera     = relationship("Camera",    back_populates="videos")
     detections = relationship("Detection", back_populates="video", cascade="all, delete")
@@ -70,8 +74,8 @@ class Detection(Base):
     bbox_h                = Column(Float,   default=0.0)
     is_in_restricted_zone = Column(Boolean, default=False)
     loitering_duration    = Column(Integer, nullable=True)
-    behaviour_label       = Column(String(32), nullable=True)   # e.g. "NORMAL_TRANSIT", "PACING", "CIRCLING", "RUNNING"
     timestamp             = Column(DateTime, default=datetime.utcnow, index=True)
+    session_id            = Column(String,  nullable=True, index=True)
     # ── Video-relative frame identity (populated only for uploaded-video detections) ──
     frame_index           = Column(Integer, nullable=True)   # 0-based frame counter
     video_time_sec        = Column(Float,   nullable=True)   # frame_index / source_fps
@@ -124,21 +128,19 @@ class Alert(Base):
     alert_id      = Column(String,  nullable=False, unique=True, index=True)
     camera_id     = Column(String,  ForeignKey("cameras.id"), nullable=False, index=True)
     video_id      = Column(String,  ForeignKey("videos.id"),  nullable=True, index=True)
+    session_id    = Column(String,  nullable=True, index=True)
     event_type    = Column(String,  nullable=False)
     object_type   = Column(String,  nullable=False)
     object_id     = Column(String,  nullable=False)
     threat_level  = Column(String,  nullable=False)   # CRITICAL | HIGH | MEDIUM | LOW | NONE
     reason        = Column(Text,    nullable=False)
     confidence    = Column(Float,   nullable=True)
-    # Phase 4.5 (D2): Separate confidence scales
-    confidence_kind = Column(String, nullable=True)   # DETECTION | FACE_MATCH
     bbox_x        = Column(Float,   default=0.0)
     bbox_y        = Column(Float,   default=0.0)
     bbox_w        = Column(Float,   default=0.0)
     bbox_h        = Column(Float,   default=0.0)
     status        = Column(String,  default="NEW", index=True)  # NEW | ACKNOWLEDGED | UNDER_INVESTIGATION | RESOLVED
     snapshot_path = Column(String,  nullable=True)
-    behaviour_label = Column(String(32), nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -169,14 +171,11 @@ class WatchlistPerson(Base):
 
     id              = Column(String,  primary_key=True, default=_uid)
     name            = Column(String,  nullable=False, index=True)
-    # Phase 1.4 (D5): unique constraint on identifier (nullable)
-    identifier      = Column(String,  nullable=True, unique=True, index=True) # e.g. "POI-9821" / "Badge #401"
+    identifier      = Column(String,  nullable=True, index=True) # e.g. "POI-9821" / "Badge #401"
     notes           = Column(Text,    nullable=True)
     threat_priority = Column(String,  default="HIGH")           # CRITICAL | HIGH | MEDIUM | LOW
     is_active       = Column(Boolean, default=True, index=True)
     photo_path      = Column(String,  nullable=True)            # Relative path to saved face photo
-    # Phase 0.1 (S1): Store original filename for display only — never for I/O
-    original_filename = Column(String, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -192,10 +191,6 @@ class FaceEmbedding(Base):
     id             = Column(String,  primary_key=True, default=_uid)
     person_id      = Column(String,  ForeignKey("watchlist_persons.id"), nullable=False, index=True)
     embedding_json = Column(Text,    nullable=False) # JSON array of 128 float values (SFace)
-    # Phase 6.2: Binary embedding storage for faster gallery load
-    embedding_blob = Column(LargeBinary, nullable=True)  # float32 512-byte blob
-    # Phase 3.1: Per-embedding photo path (multi-photo enrollment)
-    photo_path     = Column(String,  nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
 
     person = relationship("WatchlistPerson", back_populates="embeddings")
@@ -215,8 +210,6 @@ class FaceRecognitionEvent(Base):
     similarity   = Column(Float,   nullable=False) # 0.0 - 100.0 %
     cosine_score = Column(Float,   nullable=False) # raw cosine similarity
     event_type   = Column(String,  default="WATCHLIST_MATCH") # WATCHLIST_MATCH | UNKNOWN_FACE
-    # Phase 4.2: Snapshot evidence
-    snapshot_path = Column(String,  nullable=True)
     timestamp    = Column(DateTime, default=datetime.utcnow, index=True)
 
     person = relationship("WatchlistPerson", back_populates="events")
@@ -259,47 +252,3 @@ class WatchlistPlate(Base):
     is_active       = Column(Boolean, default=True, index=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-# ─── Watchlist Audit Log (Phase 5.3) ─────────────────────────────────────────
-
-class WatchlistAuditLog(Base):
-    __tablename__ = "watchlist_audit_log"
-
-    id            = Column(String,  primary_key=True, default=_uid)
-    actor         = Column(String,  nullable=False, default="system")  # user or system
-    action        = Column(String,  nullable=False)   # CREATE | UPDATE | DELETE | EXPORT
-    person_id     = Column(String,  nullable=True, index=True)
-    person_name   = Column(String,  nullable=True)
-    justification = Column(Text,    nullable=True)    # Required free text on DELETE
-    details       = Column(Text,    nullable=True)    # JSON with change details
-    timestamp     = Column(DateTime, default=datetime.utcnow, index=True)
-
-
-# ─── System Operators & Biometric Auth ───────────────────────────────────────
-
-class User(Base):
-    __tablename__ = "users"
-
-    id            = Column(String, primary_key=True, default=_uid)
-    name          = Column(String, nullable=False)
-    email         = Column(String, nullable=True, unique=True, index=True)
-    role          = Column(String, default="operator")       # admin | operator | viewer
-    is_active     = Column(Boolean, default=True, index=True)
-    photo_path    = Column(String, nullable=True)            # saved face photo
-    created_at    = Column(DateTime, default=datetime.utcnow)
-    last_login_at = Column(DateTime, nullable=True)
-
-    embeddings    = relationship("UserFaceEmbedding", back_populates="user", cascade="all, delete-orphan")
-
-
-class UserFaceEmbedding(Base):
-    __tablename__ = "user_face_embeddings"
-
-    id             = Column(String, primary_key=True, default=_uid)
-    user_id        = Column(String, ForeignKey("users.id"), nullable=False, index=True)
-    embedding_json = Column(Text, nullable=False)   # JSON array, 128 floats
-    created_at     = Column(DateTime, default=datetime.utcnow)
-
-    user           = relationship("User", back_populates="embeddings")
-
