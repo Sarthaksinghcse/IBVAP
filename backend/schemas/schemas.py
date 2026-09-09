@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Literal
+from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
@@ -26,9 +26,10 @@ class CameraStatus(str, Enum):
     ERROR       = "ERROR"
 
 class CameraSourceType(str, Enum):
-    CCTV   = "CCTV"
-    PHONE  = "PHONE"
-    WEBCAM = "WEBCAM"
+    CCTV      = "CCTV"
+    PHONE     = "PHONE"
+    WEBCAM    = "WEBCAM"
+    USB_PHONE = "USB_PHONE"
 
 class AIStatus(str, Enum):
     RUNNING = "RUNNING"
@@ -43,13 +44,6 @@ class VideoStatus(str, Enum):
     COMPLETED    = "COMPLETED"
     CANCELLED    = "CANCELLED"
     ERROR        = "ERROR"
-
-# Phase 1.4 (D3): Validated threat priority enum
-class ThreatPriority(str, Enum):
-    CRITICAL = "CRITICAL"
-    HIGH     = "HIGH"
-    MEDIUM   = "MEDIUM"
-    LOW      = "LOW"
 
 
 # ─── Shared Sub-Schemas ───────────────────────────────────────────────────────
@@ -73,6 +67,7 @@ class CameraCreate(BaseModel):
     status:      Optional[CameraStatus] = CameraStatus.ONLINE
     resolution:  Optional[str] = "1920x1080"
     fps:         Optional[float] = 25.0
+    rotation:    Optional[int] = 0
 
 class CameraUpdate(BaseModel):
     name:        Optional[str] = None
@@ -83,6 +78,10 @@ class CameraUpdate(BaseModel):
     stream_type: Optional[str] = None
     fps:         Optional[float] = None
     resolution:  Optional[str] = None
+    rotation:    Optional[int] = None
+
+class CameraRotateRequest(BaseModel):
+    rotation: int = 0  # 0, 90, 180, 270
 
 class StreamTestRequest(BaseModel):
     stream_url:  str
@@ -106,10 +105,71 @@ class CameraResponse(BaseModel):
     ai_status:     AIStatus
     fps:           Optional[float] = 25.0
     resolution:    Optional[str]   = "1920x1080"
+    rotation:      Optional[int]   = 0
     last_activity: datetime
     created_at:    Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+# ─── USB Phone Camera Schemas ─────────────────────────────────────────────────
+
+class USBDeviceItem(BaseModel):
+    serial: str
+    state: str
+    model: str
+    product: Optional[str] = ""
+    usb_info: Optional[str] = ""
+    authorized: bool = True
+
+class USBHardwareItem(BaseModel):
+    name: str
+    instance_id: Optional[str] = ""
+    status: Optional[str] = "OK"
+
+class USBDetectResponse(BaseModel):
+    adb_available: bool
+    adb_path: Optional[str] = None
+    devices: List[USBDeviceItem] = []
+    pnp_hardware_detected: List[USBHardwareItem] = []
+    instructions: List[str] = []
+
+class USBTestRequest(BaseModel):
+    phone_port: Optional[int] = 8080
+    local_port: Optional[int] = 8090
+    stream_path: Optional[str] = "/video"
+    device_serial: Optional[str] = None
+    auto_find_port: Optional[bool] = True
+
+class USBTestResponse(BaseModel):
+    success: bool
+    message: str
+    local_port: Optional[int] = 8090
+    phone_port: Optional[int] = 8080
+    resolution: Optional[str] = None
+    stream_url: Optional[str] = None
+    adb_forwarded: bool = False
+    frames_received: bool = False
+
+class USBConnectRequest(BaseModel):
+    name: str
+    location: Optional[str] = "USB Mobile Surveillance"
+    device_serial: Optional[str] = None
+    phone_port: Optional[int] = 8080
+    local_port: Optional[int] = 8090
+    stream_path: Optional[str] = "/video"
+    app_type: Optional[str] = "IP_WEBCAM" # IP_WEBCAM | DROIDCAM | CUSTOM
+    auto_find_port: Optional[bool] = True
+
+class USBFindPortResponse(BaseModel):
+    available_port: int
+    preferred_port: int
+
+class USBStatusResponse(BaseModel):
+    connected: bool
+    device_count: int
+    active_forwards: List[dict] = []
+    adb_available: bool
 
 
 
@@ -150,12 +210,8 @@ class DetectionCreate(BaseModel):
     bbox:                  BBoxSchema
     is_in_restricted_zone: Optional[bool]  = False
     loitering_duration:    Optional[int]   = None
-    behaviour_label:       Optional[str]   = None
-    trajectory:            Optional[List[List[float]]] = None
-    velocity:              Optional[float] = None
-    tortuosity:            Optional[float] = None
-    direction_changes:     Optional[int]   = None
     timestamp:             Optional[datetime] = None
+    session_id:            Optional[str]   = None
     # Video-relative frame identity — populated only for uploaded-video detections
     frame_index:           Optional[int]   = None
     video_time_sec:        Optional[float] = None
@@ -165,6 +221,7 @@ class DetectionResponse(BaseModel):
     id:                    str
     camera_id:             str
     video_id:              Optional[str]   = None
+    session_id:            Optional[str]   = None
     object_type:           str
     object_id:             str
     confidence:            float
@@ -173,11 +230,6 @@ class DetectionResponse(BaseModel):
     bbox:                  BBoxSchema
     is_in_restricted_zone: bool
     loitering_duration:    Optional[int]   = None
-    behaviour_label:       Optional[str]   = None
-    trajectory:            Optional[List[List[float]]] = None
-    velocity:              Optional[float] = None
-    tortuosity:            Optional[float] = None
-    direction_changes:     Optional[int]   = None
     timestamp:             datetime
     # Video-relative frame identity
     frame_index:           Optional[int]   = None
@@ -220,10 +272,8 @@ class AlertCreate(BaseModel):
     threat_level:  ThreatLevel
     reason:        str
     confidence:    Optional[float] = None
-    confidence_kind: Optional[str] = None   # Phase 4.5 (D2): DETECTION | FACE_MATCH
     bbox:          Optional[BBoxSchema] = None
     snapshot_path: Optional[str]   = None
-    behaviour_label: Optional[str] = None
 
 class AlertUpdate(BaseModel):
     status: AlertStatus
@@ -239,11 +289,9 @@ class AlertResponse(BaseModel):
     threat_level:  ThreatLevel
     reason:        str
     confidence:    Optional[float] = None
-    confidence_kind: Optional[str] = None   # Phase 4.5 (D2)
     bbox:          Optional[BBoxSchema] = None
     status:        AlertStatus
     snapshot_path: Optional[str]   = None
-    behaviour_label: Optional[str] = None
     created_at:    datetime
     updated_at:    datetime
 
@@ -320,22 +368,19 @@ class WatchlistPersonCreate(BaseModel):
     name:            str
     identifier:      Optional[str] = None
     notes:           Optional[str] = None
-    # Phase 1.4 (D3): Validated threat priority
-    threat_priority: Optional[ThreatPriority] = ThreatPriority.HIGH
+    threat_priority: Optional[str] = "HIGH"
     is_active:       Optional[bool] = True
 
 class WatchlistPersonUpdate(BaseModel):
     name:            Optional[str] = None
     identifier:      Optional[str] = None
     notes:           Optional[str] = None
-    # Phase 1.4 (D3): Validated threat priority
-    threat_priority: Optional[ThreatPriority] = None
+    threat_priority: Optional[str] = None
     is_active:       Optional[bool] = None
 
 class FaceEmbeddingResponse(BaseModel):
     id:         str
     person_id:  str
-    photo_path: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -348,34 +393,11 @@ class WatchlistPersonResponse(BaseModel):
     threat_priority: str
     is_active:       bool
     photo_path:      Optional[str] = None
-    original_filename: Optional[str] = None
     embeddings_count: int = 0
     created_at:      datetime
     updated_at:      datetime
 
     model_config = {"from_attributes": True}
-
-# Phase 3.1: Photo gallery response
-class PhotoGalleryItem(BaseModel):
-    embedding_id:  str
-    photo_path:    Optional[str] = None
-    quality_score: Optional[float] = None
-    created_at:    datetime
-
-class PersonPhotoGalleryResponse(BaseModel):
-    person_id:     str
-    person_name:   str
-    primary_photo: Optional[str] = None
-    photos:        List[PhotoGalleryItem] = []
-
-class FaceMatchCandidate(BaseModel):
-    person_id:     str
-    name:          Optional[str] = None
-    identifier:    Optional[str] = None
-    threat_priority: Optional[str] = None
-    cosine_score:  float = 0.0
-    similarity:    float = 0.0
-    calibrated_confidence: float = 0.0
 
 class FaceMatchResult(BaseModel):
     is_match:     bool
@@ -384,9 +406,7 @@ class FaceMatchResult(BaseModel):
     identifier:   Optional[str]   = None
     similarity:   float           = 0.0 # 0.0 - 100.0%
     cosine_score: float           = 0.0
-    calibrated_confidence: float  = 0.0
     threat_level: Optional[str]   = None
-    top_candidates: List[FaceMatchCandidate] = []
 
 class TestFaceMatchResponse(BaseModel):
     face_detected: bool
@@ -395,51 +415,8 @@ class TestFaceMatchResponse(BaseModel):
     person_name:   Optional[str]   = None
     similarity:    float           = 0.0
     cosine_score:  float           = 0.0
-    calibrated_confidence: float   = 0.0
     threshold_used: float          = 0.45
     message:       str
-    top_candidates: List[FaceMatchCandidate] = []
-
-# Phase 1.3: Face recognition event schemas
-class FaceRecognitionEventResponse(BaseModel):
-    id:           str
-    person_id:    Optional[str]   = None
-    person_name:  Optional[str]   = None
-    camera_id:    str
-    video_id:     Optional[str]   = None
-    track_id:     Optional[int]   = None
-    similarity:   float
-    cosine_score: float
-    event_type:   str
-    snapshot_path: Optional[str]  = None
-    timestamp:    datetime
-
-    model_config = {"from_attributes": True}
-
-# Phase 2.1: Watchlist embeddings for pipeline sync
-class WatchlistEmbeddingRecord(BaseModel):
-    person_id:      str
-    name:           str
-    identifier:     Optional[str] = None
-    threat_priority: str
-    embedding:      List[float]
-
-class WatchlistEmbeddingsResponse(BaseModel):
-    version:  int
-    records:  List[WatchlistEmbeddingRecord]
-
-# Phase 5.3: Audit log schemas
-class WatchlistAuditLogResponse(BaseModel):
-    id:            str
-    actor:         str
-    action:        str
-    person_id:     Optional[str] = None
-    person_name:   Optional[str] = None
-    justification: Optional[str] = None
-    details:       Optional[str] = None
-    timestamp:     datetime
-
-    model_config = {"from_attributes": True}
 
 
 # ─── ANPR Schemas ─────────────────────────────────────────────────────────────
@@ -481,3 +458,6 @@ class TestANPRResponse(BaseModel):
     plate_status:     str
     cleaned_text:     Optional[str]   = None
     message:          str
+
+
+

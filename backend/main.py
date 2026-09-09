@@ -21,8 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database.init_db import init_db
-from middleware.auth import MockAuthMiddleware
-from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr, face_auth
+from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr, stream
 from websocket.manager import router as ws_router
 
 
@@ -59,8 +58,6 @@ app = FastAPI(
 )
 
 # ─── Middleware ───────────────────────────────────────────────────────────────
-
-app.add_middleware(MockAuthMiddleware)
 
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 
@@ -107,8 +104,8 @@ app.include_router(alerts.router,     prefix="/api/alerts",     tags=["Alerts"])
 app.include_router(analytics.router,  prefix="/api/analytics",  tags=["Analytics"])
 app.include_router(zones.router,      prefix="/api/zones",      tags=["Zones"])
 app.include_router(watchlist.router,  prefix="/api/watchlist",  tags=["Watchlist"])
-app.include_router(anpr.router,       tags=["ANPR"])
-app.include_router(face_auth.router,  prefix="/api/auth",       tags=["Face Auth"])
+app.include_router(anpr.router,       prefix="/api/anpr",       tags=["ANPR"])
+app.include_router(stream.router,     prefix="/api/stream",     tags=["stream"])
 app.include_router(ws_router)
 
 

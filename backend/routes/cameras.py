@@ -812,7 +812,8 @@ async def infer_webcam_frame(data: WebcamInferRequest):
                         cosine_score=face_eval["cosine_score"],
                         track_id=track.track_id,
                         bbox=track.bbox,
-                        is_in_zone=is_in_zone
+                        is_in_zone=is_in_zone,
+                        frame_bgr=frame
                     )
                 elif face_eval.get("face_detected"):
                     face_match_info = {

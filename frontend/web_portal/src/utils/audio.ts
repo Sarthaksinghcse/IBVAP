@@ -36,6 +36,10 @@ export function playAlertChime() {
   }
 }
 
+export function playRestrictedZonePersonBeep() {
+  playAlertChime();
+}
+
 /**
  * Announce a critical threat verbally using browser speech synthesis.
  * Format: "Critical alert. [Object] detected in restricted zone [at Camera]."
