@@ -1,25 +1,26 @@
 import axios from 'axios';
-import type { Alert, Detection, Camera, Video, Analytics, AlertStatus, Zone } from '../types';
+import type {
+  Alert,
+  Detection,
+  Camera,
+  Video,
+  Analytics,
+  AlertStatus,
+  Zone,
+  USBDetectResponse,
+  USBTestRequest,
+  USBTestResponse,
+  USBConnectRequest,
+  USBStatusResponse,
+  USBFindPortResponse,
+} from '../types';
 
 // ─── Axios Client ─────────────────────────────────────────────────────────────
-
-const apiKey = import.meta.env.VITE_IBVAP_API_KEY || import.meta.env.VITE_API_KEY || 'admin-key';
 
 const client = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
   timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-    'x-api-key': apiKey,
-  },
-});
-
-client.interceptors.request.use((config) => {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null;
-  if (token && config.headers) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+  headers: { 'Content-Type': 'application/json' },
 });
 
 client.interceptors.response.use(
@@ -47,6 +48,9 @@ export const updateCamera = (id: string, data: Partial<Camera>): Promise<Camera>
 export const deleteCamera = (id: string): Promise<{ status: string; message: string }> =>
   client.delete<{ status: string; message: string }>(`/api/cameras/${id}`).then((r) => r.data);
 
+export const setCameraRotation = (id: string, rotation: number): Promise<{ status: string; camera_id: string; rotation: number }> =>
+  client.post<{ status: string; camera_id: string; rotation: number }>(`/api/cameras/${id}/rotate`, { rotation }).then((r) => r.data);
+
 export interface StreamTestResponse {
   success: boolean;
   status: string;
@@ -64,6 +68,23 @@ export const testStream = (streamUrl: string, streamType: string = 'RTSP'): Prom
 export const discoverCameras = (): Promise<{ status: string; discovered_cameras: any[]; local_ip: string; message: string }> =>
   client.post('/api/cameras/discover').then((r) => r.data);
 
+// ─── USB Phone Camera Endpoints ───────────────────────────────────────────────
+
+export const detectUsbPhone = (): Promise<USBDetectResponse> =>
+  client.post<USBDetectResponse>('/api/cameras/usb/detect').then((r) => r.data);
+
+export const testUsbPhoneStream = (data: USBTestRequest): Promise<USBTestResponse> =>
+  client.post<USBTestResponse>('/api/cameras/usb/test', data).then((r) => r.data);
+
+export const connectUsbPhone = (data: USBConnectRequest): Promise<Camera> =>
+  client.post<Camera>('/api/cameras/usb/connect', data).then((r) => r.data);
+
+export const getUsbPhoneStatus = (): Promise<USBStatusResponse> =>
+  client.get<USBStatusResponse>('/api/cameras/usb/status').then((r) => r.data);
+
+export const findAvailableUsbPort = (preferred: number = 8090): Promise<USBFindPortResponse> =>
+  client.get<USBFindPortResponse>(`/api/cameras/usb/find-port?preferred=${preferred}`).then((r) => r.data);
+
 export interface WebcamInferResponse {
   detections: Detection[];
   frame_seq: number;
@@ -77,14 +98,15 @@ export const inferWebcamFrame = (
   frameSeq: number = 0,
   faceRecognitionEnabled: boolean = true,
   faceThreshold: number = 0.45,
-  anprEnabled: boolean = true
+  anprEnabled: boolean = true,
+  cameraId: string = 'WEBCAM-01'
 ): Promise<WebcamInferResponse> =>
   client
     .post<WebcamInferResponse>('/api/cameras/webcam/infer', {
       image_base64: imageBase64,
       conf_threshold: confThreshold,
       frame_seq: frameSeq,
-      camera_id: 'WEBCAM-01',
+      camera_id: cameraId,
       face_recognition_enabled: faceRecognitionEnabled,
       face_threshold: faceThreshold,
       anpr_enabled: anprEnabled,
@@ -93,8 +115,8 @@ export const inferWebcamFrame = (
 
 
 
-export const resetWebcamSession = (): Promise<{ status: string }> =>
-  client.post<{ status: string }>('/api/cameras/webcam/reset').then((r) => r.data);
+export const resetWebcamSession = (cameraId: string = 'WEBCAM-01'): Promise<{ status: string }> =>
+  client.post<{ status: string }>(`/api/cameras/webcam/reset?camera_id=${encodeURIComponent(cameraId)}`).then((r) => r.data);
 
 
 // ─── Alert Endpoints ──────────────────────────────────────────────────────────
@@ -223,13 +245,7 @@ export const deleteZone = (sourceId: string): Promise<{ status: string; message:
 
 // ─── Watchlist & Face Recognition Endpoints ───────────────────────────────────
 
-import type { 
-  WatchlistPerson, 
-  TestFaceMatchResult,
-  PersonPhotoGalleryResponse,
-  FaceRecognitionEventResponse,
-  WatchlistAuditLogResponse
-} from '../types';
+import type { WatchlistPerson, TestFaceMatchResult } from '../types';
 
 export const getWatchlist = (): Promise<WatchlistPerson[]> =>
   client.get<WatchlistPerson[]>('/api/watchlist').then((r) => r.data);
@@ -244,24 +260,14 @@ export const registerWatchlistPerson = (formData: FormData): Promise<WatchlistPe
     })
     .then((r) => r.data);
 
-export const addWatchlistPhoto = (personId: string, formData: FormData): Promise<any> =>
-  client
-    .post<any>(`/api/watchlist/${personId}/photos`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-    .then((r) => r.data);
-
-export const deleteWatchlistPhoto = (personId: string, embeddingId: string): Promise<any> =>
-  client.delete<any>(`/api/watchlist/${personId}/photos/${embeddingId}`).then((r) => r.data);
-
 export const updateWatchlistPerson = (
   id: string,
   data: Partial<WatchlistPerson>
 ): Promise<WatchlistPerson> =>
   client.patch<WatchlistPerson>(`/api/watchlist/${id}`, data).then((r) => r.data);
 
-export const deleteWatchlistPerson = (id: string, justification: string = "Manual deletion"): Promise<{ status: string; message: string }> =>
-  client.delete<{ status: string; message: string }>(`/api/watchlist/${id}`, { params: { justification } }).then((r) => r.data);
+export const deleteWatchlistPerson = (id: string): Promise<{ status: string; message: string }> =>
+  client.delete<{ status: string; message: string }>(`/api/watchlist/${id}`).then((r) => r.data);
 
 export const testFaceMatch = (formData: FormData): Promise<TestFaceMatchResult> =>
   client
@@ -269,15 +275,6 @@ export const testFaceMatch = (formData: FormData): Promise<TestFaceMatchResult> 
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
-
-export const getFaceEvents = (params?: { person_id?: string; camera_id?: string; event_type?: string; limit?: number }): Promise<FaceRecognitionEventResponse[]> =>
-  client.get<FaceRecognitionEventResponse[]>('/api/watchlist/events', { params }).then((r) => r.data);
-
-export const getUnknownFaceClusters = (days: number = 7, minSightings: number = 2): Promise<{ clusters: any[]; total_unknown: number }> =>
-  client.get<{ clusters: any[]; total_unknown: number }>('/api/watchlist/unknown-faces', { params: { days, min_sightings: minSightings } }).then((r) => r.data);
-
-export const getAuditLog = (params?: { person_id?: string; action?: string; limit?: number }): Promise<WatchlistAuditLogResponse[]> =>
-  client.get<WatchlistAuditLogResponse[]>('/api/watchlist/audit-log', { params }).then((r) => r.data);
 
 
 // ─── ANPR Endpoints ───────────────────────────────────────────────────────────
@@ -301,20 +298,6 @@ export const testANPRPlate = (formData: FormData): Promise<TestANPRResult> =>
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data);
-
-// ─── Face Authentication Endpoints ───────────────────────────────────────────
-
-import type { AuthUser, AuthResponse, RegisterWebcamPayload, LoginWebcamPayload } from '../types';
-
-export const registerFaceWebcam = (data: RegisterWebcamPayload): Promise<AuthResponse> =>
-  client.post<AuthResponse>('/api/auth/register-webcam', data).then((r) => r.data);
-
-export const loginFaceWebcam = (data: LoginWebcamPayload): Promise<AuthResponse> =>
-  client.post<AuthResponse>('/api/auth/login-webcam', data).then((r) => r.data);
-
-export const getMe = (): Promise<AuthUser> =>
-  client.get<AuthUser>('/api/auth/me').then((r) => r.data);
-
 
 
 

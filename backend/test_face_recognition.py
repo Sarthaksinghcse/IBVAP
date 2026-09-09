@@ -78,7 +78,7 @@ def run_all_tests():
     # 2. Test Non-face rejection
     print("\n[TEST 2] Testing non-face image rejection...")
     non_face_img = _create_synthetic_realistic_face(face_variant=99)
-    success, emb, err, *rest = engine_inst.process_registration_image(non_face_img)
+    success, emb, err = engine_inst.process_registration_image(non_face_img)
     assert not success, "Error: Non-face image was incorrectly accepted!"
     assert "No clear human face detected" in (err or ""), f"Unexpected error msg: {err}"
     print(f"[PASS] Correctly rejected non-face image with message: '{err}'")
@@ -136,7 +136,7 @@ def run_all_tests():
         query_same = emb_a + np.random.normal(0, 0.001, 128).astype(np.float32)
         query_same = query_same / np.linalg.norm(query_same)
 
-        is_match, pid, pname, ident, priority, sim_pct, cosine_score, *rest = engine_inst.match_against_watchlist(
+        is_match, pid, pname, ident, priority, sim_pct, cosine_score = engine_inst.match_against_watchlist(
             query_same, watchlist_records, threshold=0.50
         )
         assert is_match, "Same face should match against registered profile!"
@@ -151,7 +151,7 @@ def run_all_tests():
         emb_b = engine_inst.recognizer.feature(aligned_b).flatten()
         emb_b = emb_b / np.linalg.norm(emb_b)
 
-        is_match_b, pid_b, pname_b, _, _, sim_pct_b, cosine_b, *rest = engine_inst.match_against_watchlist(
+        is_match_b, pid_b, pname_b, _, _, sim_pct_b, cosine_b = engine_inst.match_against_watchlist(
             emb_b, watchlist_records, threshold=0.50
         )
         assert not is_match_b, "Different face incorrectly matched registered person!"
@@ -160,12 +160,12 @@ def run_all_tests():
 
         # 6. Test Configurable Threshold Sensitivity
         print("\n[TEST 6] Testing configurable threshold sensitivity...")
-        is_strict_match, *rest = engine_inst.match_against_watchlist(
+        is_strict_match, _, _, _, _, _, _ = engine_inst.match_against_watchlist(
             query_same, watchlist_records, threshold=0.9999
         )
         print(f"  Strict threshold (0.9999) -> match: {is_strict_match} (Strict enforcement)")
 
-        is_std_match, *rest = engine_inst.match_against_watchlist(
+        is_std_match, _, _, _, _, _, _ = engine_inst.match_against_watchlist(
             query_same, watchlist_records, threshold=0.50
         )
         print(f"  Standard threshold (0.50)  -> match: {is_std_match} (Standard surveillance)")

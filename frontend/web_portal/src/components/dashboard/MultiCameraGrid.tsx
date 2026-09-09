@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Camera, Maximize2, ShieldAlert, Wifi, WifiOff, Cpu, Video, Smartphone, Plus } from 'lucide-react';
+import { Camera, Maximize2, ShieldAlert, Wifi, WifiOff, Cpu, Video, Smartphone, Plus, Usb } from 'lucide-react';
 import type { Camera as CameraType, Detection, Zone, AppSettings } from '../../types';
 
 interface MultiCameraGridProps {
@@ -182,6 +182,7 @@ export function MultiCameraGrid({
         const hasZone = Boolean(camZone && camZone.coordinates && camZone.coordinates.length >= 3 && camZone.enabled);
         const camDets = detections.filter((d) => d.camera_id === cam.id && !d.video_id);
         const isSelected = cam.id === selectedCamId && !isCameraMode;
+        const isUsb = cam.source_type === 'USB_PHONE';
         const isPhone = cam.source_type === 'PHONE';
 
         return (
@@ -198,7 +199,9 @@ export function MultiCameraGrid({
             {/* Tile Header */}
             <div className="flex items-center justify-between px-3 py-2 bg-[#0a1020] border-b border-[#1e2d4a] z-10">
               <div className="flex items-center gap-2 min-w-0">
-                {isPhone ? (
+                {isUsb ? (
+                  <Usb size={13} className="text-cyan-400 flex-shrink-0" />
+                ) : isPhone ? (
                   <Smartphone size={13} className="text-purple-400 flex-shrink-0" />
                 ) : (
                   <Video size={13} className="text-blue-400 flex-shrink-0" />
@@ -208,12 +211,14 @@ export function MultiCameraGrid({
                     <span className="text-xs font-mono font-bold text-slate-200 truncate">{cam.name || cam.id}</span>
                     <span
                       className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold ${
-                        isPhone
+                        isUsb
+                          ? 'bg-cyan-950/80 border border-cyan-500/30 text-cyan-300'
+                          : isPhone
                           ? 'bg-purple-950/80 border border-purple-500/30 text-purple-300'
                           : 'bg-blue-950/80 border border-blue-500/30 text-blue-300'
                       }`}
                     >
-                      {isPhone ? 'PHONE / WIFI' : 'CCTV / RTSP'}
+                      {isUsb ? 'USB PHONE' : isPhone ? 'PHONE / WIFI' : 'CCTV / RTSP'}
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-400 truncate">{cam.location || cam.id}</p>
@@ -253,7 +258,7 @@ export function MultiCameraGrid({
             <div className="relative flex-1 cctv-bg flex items-center justify-center overflow-hidden">
               {cam.stream_url ? (
                 <img
-                  src={`/api/cameras/${cam.id}/stream`}
+                  src={`/api/cameras/${cam.id}/stream?conf=${(settings.aiThreshold || 50) / 100}`}
                   alt={cam.name}
                   className="w-full h-full object-cover z-0"
                   onError={(e) => {

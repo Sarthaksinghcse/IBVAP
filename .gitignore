@@ -1,71 +1,14 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
 venv/
-.venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
-# Pip cache and package installs
-.pip_cache/
-pip-wheel-metadata/
-
-# Node / Frontend
 node_modules/
-*/node_modules/
-dist/
-*/dist/
-frontend/desktop/dist/
-frontend/web_portal/dist/
-.npm
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Model runs & datasets
-runs/
-datasets/
-
-# Runtime data & temp files
-.tmp/
-tmp/
-*.log
+.pip_cache/
 *.db
-*.sqlite
-*.sqlite3
 *.db-shm
 *.db-wal
-backend/ibvap.db
-storage/videos/*
-!storage/videos/.gitkeep
-storage/snapshots/*
-!storage/snapshots/.gitkeep
-storage/snapshots/faces/*
-!storage/snapshots/faces/.gitkeep
-storage/watchlist/*
-!storage/watchlist/.gitkeep
-storage/face_crops/*
-!storage/face_crops/.gitkeep
-storage/users/*
-!storage/users/.gitkeep
+storage/
+runs/
+datasets/
+__pycache__/
 
-# Environment variables
 .env
-.env.local
-.env.*.local
-
-# Operating System files
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# IDE & Editor files
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
+.env.*
+*.env

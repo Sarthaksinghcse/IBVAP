@@ -29,9 +29,9 @@ export function useCameras() {
         setSystemStatus({
           backend_status: 'ONLINE',
           database_status: 'OK',
-          ai_engine_status: 'RUNNING',
-          fps: hasRunning ? Math.round(avgFps * 10) / 10 : 25.0,
-          processing_time_ms: 42,
+          ai_engine_status: hasRunning ? 'RUNNING' : 'STOPPED',
+          fps: Math.round(avgFps * 10) / 10,
+          processing_time_ms: hasRunning ? 42 : 0,
         });
       })
       .catch((e) => {

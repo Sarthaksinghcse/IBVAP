@@ -3,47 +3,162 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from database.database import get_db
-from models.models import Camera, Zone
+from models.models import Camera, Zone, Alert, ANPREvent, WatchlistPlate, Detection as DB_Detection
 from schemas.schemas import (
     CameraResponse,
     CameraCreate,
     CameraUpdate,
     StreamTestRequest,
     StreamTestResponse,
+    USBDetectResponse,
+    USBTestRequest,
+    USBTestResponse,
+    USBConnectRequest,
+    USBStatusResponse,
+    USBFindPortResponse,
+    CameraRotateRequest,
 )
+from services.usb_phone_manager import usb_phone_manager
+from services.camera_stream_worker import camera_stream_manager
 from websocket.manager import manager
 from pydantic import BaseModel
 from datetime import datetime
-import base64, cv2, numpy as np, uuid, os, logging, time, socket, asyncio
+import base64, cv2, numpy as np, uuid, os, logging, time, socket, asyncio, json
 
 logger = logging.getLogger("camera_route")
 
 router = APIRouter()
 
-# ─── Persistent Webcam AI Singletons ──────────────────────────────────────────
-_webcam_detector = None
-_webcam_tracker = None
-_webcam_threat_engine = None
+# ─── Persistent Camera AI Instances (Per-Camera Registry) ─────────────────────
+_shared_detector = None
+_camera_trackers: dict = {}
+_camera_threat_engines: dict = {}
+_live_dedup_cache: dict = {}
 
 
-def _get_webcam_ai_instances():
-    global _webcam_detector, _webcam_tracker, _webcam_threat_engine
-    if _webcam_detector is None:
+def _get_shared_detector(conf_threshold: float = 0.45):
+    global _shared_detector
+    if _shared_detector is None:
         from ai_engine.detection.detector import Detector
-        from ai_engine.tracking.tracker import Tracker
-        from ai_engine.intelligence.threat_engine import ThreatEngine
         model_path = os.path.normpath(
             os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "models", "yolov8n.pt")
         )
-        _webcam_detector = Detector(model_path=model_path, conf_threshold=0.45)
-        _webcam_tracker = Tracker()
-        from routes.alerts import create_and_broadcast_alert_sync
-        _webcam_threat_engine = ThreatEngine(
-            camera_id="WEBCAM-01",
-            loitering_threshold=15.0,
-            alert_callback=create_and_broadcast_alert_sync
+        _shared_detector = Detector(model_path=model_path, conf_threshold=conf_threshold)
+    return _shared_detector
+
+
+def _handle_live_detection_sync(det_data: dict):
+    """
+    Persist real-time live camera detections to DB with sensible deduplication and broadcast via WebSocket.
+    """
+    camera_id = det_data.get("camera_id", "WEBCAM-01")
+    object_id = det_data.get("object_id", "UNKNOWN")
+    event_type = det_data.get("event_type", "PERSON_DETECTED")
+    now_ts = time.time()
+    cache_key = (camera_id, object_id)
+
+    prev = _live_dedup_cache.get(cache_key)
+    should_record = False
+    if prev is None:
+        should_record = True
+    elif prev.get("last_event") != event_type:
+        should_record = True
+    elif (now_ts - prev.get("last_time", 0)) >= 3.0:
+        should_record = True
+
+    if not should_record:
+        return
+
+    _live_dedup_cache[cache_key] = {"last_time": now_ts, "last_event": event_type}
+
+    from database.database import SessionLocal
+    from models.models import Detection as DBMsg
+    db = SessionLocal()
+    try:
+        bbox = det_data.get("bbox") or {}
+        p_info = det_data.get("plate_info") or {}
+        now_dt = datetime.utcnow()
+        det_record = DBMsg(
+            id=str(uuid.uuid4()),
+            camera_id=camera_id,
+            video_id=None,
+            object_type=det_data.get("object_type", "PERSON"),
+            object_id=object_id,
+            confidence=det_data.get("confidence", 0.0),
+            zone=det_data.get("zone"),
+            event_type=event_type,
+            bbox_x=bbox.get("x", 0.0),
+            bbox_y=bbox.get("y", 0.0),
+            bbox_w=bbox.get("w", 0.0),
+            bbox_h=bbox.get("h", 0.0),
+            is_in_restricted_zone=det_data.get("is_in_restricted_zone", False),
+            loitering_duration=det_data.get("loitering_duration"),
+            timestamp=now_dt,
+            frame_index=None,
+            video_time_sec=None,
+            plate_text=p_info.get("plate_text"),
+            plate_confidence=p_info.get("plate_confidence"),
+            plate_status=p_info.get("plate_status"),
+            plate_bbox_x=p_info.get("plate_bbox", {}).get("x") if p_info.get("plate_bbox") else None,
+            plate_bbox_y=p_info.get("plate_bbox", {}).get("y") if p_info.get("plate_bbox") else None,
+            plate_bbox_w=p_info.get("plate_bbox", {}).get("w") if p_info.get("plate_bbox") else None,
+            plate_bbox_h=p_info.get("plate_bbox", {}).get("h") if p_info.get("plate_bbox") else None,
         )
-    return _webcam_detector, _webcam_tracker, _webcam_threat_engine
+        db.add(det_record)
+        db.commit()
+
+        ws_payload = {
+            "id": det_record.id,
+            "camera_id": camera_id,
+            "object_type": det_record.object_type,
+            "object_id": det_record.object_id,
+            "confidence": det_record.confidence,
+            "zone": det_record.zone,
+            "event_type": event_type,
+            "bbox": bbox,
+            "is_in_restricted_zone": det_record.is_in_restricted_zone,
+            "loitering_duration": det_record.loitering_duration,
+            "timestamp": now_dt.isoformat(),
+            "plate_info": p_info if p_info.get("plate_detected") else None,
+        }
+        manager.broadcast_sync({
+            "type": "DETECTION",
+            "data": ws_payload,
+            "timestamp": now_dt.isoformat(),
+        })
+        logger.info(f"[WS] Detection sent: {object_id} ({event_type}) for {camera_id}")
+    except Exception as dbe:
+        logger.warning(f"[WebcamAI] Error persisting live detection: {dbe}")
+    finally:
+        db.close()
+
+
+def _get_camera_ai_pipeline(camera_id: str):
+    """Return camera-specific Tracker and ThreatEngine instances."""
+    global _camera_trackers, _camera_threat_engines
+    from ai_engine.tracking.tracker import Tracker
+    from ai_engine.intelligence.threat_engine import ThreatEngine
+    from routes.alerts import create_and_broadcast_alert_sync
+
+    if camera_id not in _camera_trackers:
+        _camera_trackers[camera_id] = Tracker()
+
+    if camera_id not in _camera_threat_engines:
+        _camera_threat_engines[camera_id] = ThreatEngine(
+            camera_id=camera_id,
+            loitering_threshold=15.0,
+            alert_callback=create_and_broadcast_alert_sync,
+            detection_callback=_handle_live_detection_sync
+        )
+
+    return _camera_trackers[camera_id], _camera_threat_engines[camera_id]
+
+
+def _get_webcam_ai_instances():
+    """Backward compatibility helper."""
+    detector = _get_shared_detector()
+    tracker, threat_engine = _get_camera_ai_pipeline("WEBCAM-01")
+    return detector, tracker, threat_engine
 
 
 
@@ -131,6 +246,11 @@ def update_camera(camera_id: str, data: CameraUpdate, db: Session = Depends(get_
         cam.fps = data.fps
     if data.resolution is not None:
         cam.resolution = data.resolution
+    if data.rotation is not None:
+        cam.rotation = data.rotation % 360
+        worker = camera_stream_manager.get_worker(camera_id)
+        if worker:
+            worker.set_rotation(cam.rotation)
 
     cam.last_activity = datetime.utcnow()
     db.commit()
@@ -145,6 +265,8 @@ def delete_camera(camera_id: str, db: Session = Depends(get_db)):
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
 
+    # Stop active stream worker if running
+    camera_stream_manager.stop_worker(camera_id)
     # Delete any associated zones for this camera
     db.query(Zone).filter(Zone.source_id == camera_id).delete()
     db.delete(cam)
@@ -240,11 +362,207 @@ def discover_network_cameras():
     }
 
 
-@router.get("/{camera_id}/stream")
-async def get_camera_mjpeg_stream(camera_id: str, db: Session = Depends(get_db)):
+@router.post("/usb/detect", response_model=USBDetectResponse)
+def detect_usb_cameras():
     """
-    Live MJPEG stream for network CCTV / Phone cameras with real YOLOv8 inference.
-    Allows standard web browsers to view RTSP / Phone streams natively.
+    Detect physical USB Android devices via ADB and check Windows PnP devices as fallback.
+    Returns device list, authorization status, and connection guidance.
+    """
+    try:
+        data = usb_phone_manager.detect_devices()
+        return USBDetectResponse(**data)
+    except Exception as e:
+        logger.error(f"[USBPhone] Error detecting devices: {e}", exc_info=True)
+        return USBDetectResponse(
+            adb_available=False,
+            adb_path=None,
+            devices=[],
+            pnp_hardware_detected=[],
+            instructions=[f"Error during USB detection: {str(e)}"]
+        )
+
+
+@router.get("/usb/find-port", response_model=USBFindPortResponse)
+def find_available_usb_port(preferred: int = 8090):
+    """
+    Finds the first available local TCP port on the host (testing 8090, 8091, 8092, etc.).
+    Avoids Windows socket error 10013 / occupied port conflicts.
+    """
+    avail = usb_phone_manager.find_available_local_port(start_port=preferred)
+    return USBFindPortResponse(available_port=avail, preferred_port=preferred)
+
+
+@router.post("/usb/test", response_model=USBTestResponse)
+async def test_usb_camera_stream(data: USBTestRequest):
+    """
+    Sets up ADB local port forward (adb forward tcp:local_port tcp:phone_port).
+    If preferred local_port (default 8090) fails or is blocked, automatically iterates
+    to find an available port (8090, 8091, 8092...).
+    Then probes the stream URL to ensure valid video frames are received over USB.
+    """
+    adb_path = usb_phone_manager.get_adb_path()
+    if not adb_path:
+        return USBTestResponse(
+            success=False,
+            message="ADB executable not found. Please verify ADB installation or start Android Platform Tools.",
+            local_port=data.local_port,
+            phone_port=data.phone_port,
+            adb_forwarded=False,
+            frames_received=False
+        )
+
+    # 1. Forward port via ADB with auto-fallback
+    fwd_ok, actual_local_port, fwd_msg = usb_phone_manager.forward_port_with_fallback(
+        preferred_local_port=data.local_port or 8090,
+        phone_port=data.phone_port or 8080,
+        serial=data.device_serial,
+        auto_find=data.auto_find_port if data.auto_find_port is not None else True
+    )
+    if not fwd_ok:
+        return USBTestResponse(
+            success=False,
+            message=fwd_msg,
+            local_port=data.local_port,
+            phone_port=data.phone_port,
+            adb_forwarded=False,
+            frames_received=False
+        )
+
+    # 2. Probe the stream
+    stream_url = f"http://127.0.0.1:{actual_local_port}{data.stream_path}"
+    loop = asyncio.get_event_loop()
+    probe_ok, shape, probe_msg = await loop.run_in_executor(
+        None, lambda: usb_phone_manager.probe_stream(stream_url, timeout_seconds=4.0)
+    )
+
+    resolution_str = f"{shape[0]}x{shape[1]}" if shape else None
+    return USBTestResponse(
+        success=probe_ok,
+        message=probe_msg,
+        local_port=actual_local_port,
+        phone_port=data.phone_port,
+        resolution=resolution_str,
+        stream_url=stream_url if probe_ok else None,
+        adb_forwarded=True,
+        frames_received=probe_ok
+    )
+
+
+@router.post("/usb/connect", response_model=CameraResponse)
+def connect_usb_camera(data: USBConnectRequest, db: Session = Depends(get_db)):
+    """
+    Connect an Android physical camera over USB Data Cable:
+    1. Validates that the device is connected and authorized over ADB.
+    2. Forwards the port via ADB (using fallback if 8090 is blocked).
+    3. Mandatory: Probes the /video endpoint and verifies actual frames are received before declaring connected.
+    4. Registers or updates the camera in the database with source_type='USB_PHONE'.
+    """
+    # 1. Check for authorized Android device
+    detect_info = usb_phone_manager.detect_devices()
+    devices = detect_info.get("devices", [])
+    authorized = [d for d in devices if d.get("authorized")]
+    if not authorized:
+        raise HTTPException(
+            status_code=400,
+            detail="No authorized Android device detected over USB. Unlock your phone screen and tap 'Always allow from this computer' on the USB Debugging prompt."
+        )
+
+    target_serial = data.device_serial or authorized[0]["serial"]
+
+    # 2. Forward port with auto-fallback
+    fwd_ok, actual_local_port, fwd_msg = usb_phone_manager.forward_port_with_fallback(
+        preferred_local_port=data.local_port or 8090,
+        phone_port=data.phone_port or 8080,
+        serial=target_serial,
+        auto_find=data.auto_find_port if data.auto_find_port is not None else True
+    )
+    if not fwd_ok:
+        raise HTTPException(status_code=400, detail=f"USB Port Forwarding failed: {fwd_msg}")
+
+    stream_url = f"http://127.0.0.1:{actual_local_port}{data.stream_path}"
+
+    # 3. Test URL and verify actual frames are received before declaring connected
+    probe_ok, shape, probe_msg = usb_phone_manager.probe_stream(stream_url, timeout_seconds=4.0)
+    if not probe_ok or not shape:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ADB forwarded successfully to 127.0.0.1:{actual_local_port}, but camera stream test failed: {probe_msg}. Ensure IP Webcam or DroidCam is actively streaming on phone port {data.phone_port}."
+        )
+
+    resolution_str = f"{shape[0]}x{shape[1]}"
+    now = datetime.utcnow()
+
+    # 4. Check if a camera with this name or stream_url already exists
+    existing = db.query(Camera).filter(
+        (Camera.name == data.name) | (Camera.stream_url == stream_url)
+    ).first()
+
+    if existing:
+        existing.name = data.name
+        existing.location = data.location or "USB Mobile Surveillance"
+        existing.source_type = "USB_PHONE"
+        existing.stream_type = "HTTP"
+        existing.stream_url = stream_url
+        existing.status = "ONLINE"
+        existing.resolution = resolution_str
+        existing.last_activity = now
+        db.commit()
+        db.refresh(existing)
+        logger.info(f"[USBPhone] Updated existing camera {existing.id} ({existing.name}) to USB stream {stream_url} ({resolution_str})")
+        return existing
+
+    # Create new camera
+    cam_id = f"USB-{uuid.uuid4().hex[:6].upper()}"
+    cam = Camera(
+        id=cam_id,
+        name=data.name,
+        location=data.location or "USB Mobile Surveillance",
+        source_type="USB_PHONE",
+        stream_url=stream_url,
+        stream_type="HTTP",
+        status="ONLINE",
+        ai_status="STOPPED",
+        fps=25.0,
+        resolution=resolution_str,
+        last_activity=now,
+        created_at=now,
+    )
+    db.add(cam)
+    db.commit()
+    db.refresh(cam)
+    logger.info(f"[USBPhone] Registered new USB Camera: {cam.name} ({cam.id}) -> {stream_url} ({resolution_str})")
+    return cam
+
+
+@router.get("/usb/status", response_model=USBStatusResponse)
+def get_usb_status():
+    """Returns the current connection and forwarding status for USB camera devices."""
+    data = usb_phone_manager.detect_devices()
+    devices = data.get("devices", [])
+    has_authorized = any(d.get("authorized", False) for d in devices)
+    return USBStatusResponse(
+        connected=has_authorized,
+        device_count=len(devices),
+        active_forwards=list(usb_phone_manager._active_forwards.values()),
+        adb_available=data.get("adb_available", False)
+    )
+
+
+class CameraConfigUpdate(BaseModel):
+    conf_threshold: Optional[float] = None
+
+
+@router.get("/{camera_id}/stream")
+async def get_camera_mjpeg_stream(
+    camera_id: str,
+    conf: Optional[float] = Query(None, description="Confidence threshold (0.05 - 1.0)"),
+    rotate: Optional[int] = Query(None, description="Camera stream rotation degrees (0, 90, 180, 270)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Live low-latency MJPEG stream for network CCTV / USB Phone cameras with decoupled YOLOv8 inference,
+    persistent tracking, zone intrusion detection, loitering analysis, and graceful disconnect recovery.
+    Runs at full frame rate (~25-30 FPS) without freezing during AI inference.
     """
     cam = db.query(Camera).filter(Camera.id == camera_id).first()
     if not cam:
@@ -253,45 +571,89 @@ async def get_camera_mjpeg_stream(camera_id: str, db: Session = Depends(get_db))
     if not cam.stream_url:
         raise HTTPException(status_code=400, detail="Camera does not have a stream URL configured")
 
-    def frame_generator():
-        cap = cv2.VideoCapture(cam.stream_url)
-        detector, tracker, threat_engine = _get_webcam_ai_instances()
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    time.sleep(0.1)
-                    continue
+    conf_val = conf if (conf is not None and 0.05 <= conf <= 1.0) else 0.30
+    rot_val = rotate if rotate is not None else (cam.rotation or 0)
 
-                # Run inference periodically
-                raw_dets = detector.detect(frame, camera_id=camera_id, track=True)
-                active_tracks = tracker.update(raw_dets)
-                threat_engine.process_tracks(active_tracks)
+    worker = camera_stream_manager.get_or_create_worker(
+        camera_id=camera_id,
+        stream_url=cam.stream_url,
+        source_type=cam.source_type or "USB_PHONE",
+        conf_threshold=conf_val,
+        rotation=rot_val
+    )
+    worker.refresh_zone_from_db()
+    if conf is not None:
+        worker.set_confidence(conf_val)
+    if rotate is not None:
+        worker.set_rotation(rot_val)
 
-                # Draw bounding boxes onto frame
-                for trk in active_tracks:
-                    x1, y1, x2, y2 = trk.bbox["x"], trk.bbox["y"], trk.bbox["w"], trk.bbox["h"]
-                    h_f, w_f = frame.shape[:2]
-                    px1 = int((x1 / 100.0) * w_f)
-                    py1 = int((y1 / 100.0) * h_f)
-                    pw = int((x2 / 100.0) * w_f)
-                    ph = int((y2 / 100.0) * h_f)
-                    cv2.rectangle(frame, (px1, py1), (px1 + pw, py1 + ph), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{trk.object_label} {trk.confidence:.0f}%", (px1, max(15, py1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    return StreamingResponse(
+        worker.generate_mjpeg(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
 
-                ret_enc, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                if not ret_enc:
-                    continue
 
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-                time.sleep(0.06) # ~15 FPS
-        except GeneratorExit:
-            pass
-        finally:
-            cap.release()
+@router.get("/{camera_id}/metrics")
+def get_camera_metrics(camera_id: str, db: Session = Depends(get_db)):
+    """Return actual measured runtime metrics (Camera FPS, AI FPS, Latency ms, Active Tracks)."""
+    worker = camera_stream_manager.get_worker(camera_id)
+    if worker:
+        return worker.get_metrics()
 
-    return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+    cam = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    return {
+        "camera_id": camera_id,
+        "camera_fps": 0.0,
+        "ai_fps": 0.0,
+        "latency_ms": 0.0,
+        "inference_time_ms": 0.0,
+        "dropped_stale_frames": 0,
+        "active_tracks": 0,
+        "ai_status": "OFFLINE",
+        "conf_threshold": 30.0,
+        "rotation": cam.rotation or 0,
+        "source_type": cam.source_type,
+        "active_viewers": 0
+    }
+
+
+@router.post("/{camera_id}/rotate")
+def set_camera_rotation(camera_id: str, data: CameraRotateRequest, db: Session = Depends(get_db)):
+    """Dynamically rotate camera feed (0, 90, 180, 270) and persist to database."""
+    cam = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    rot = data.rotation % 360
+    if rot not in [0, 90, 180, 270]:
+        raise HTTPException(status_code=400, detail="Invalid rotation degrees. Must be 0, 90, 180, or 270.")
+
+    cam.rotation = rot
+    db.commit()
+    db.refresh(cam)
+
+    worker = camera_stream_manager.get_worker(camera_id)
+    if worker:
+        worker.set_rotation(rot)
+
+    logger.info(f"[Cameras] Set camera {camera_id} rotation to {rot} deg")
+    return {"status": "ok", "camera_id": camera_id, "rotation": rot}
+
+
+@router.post("/{camera_id}/config")
+def update_camera_config(camera_id: str, data: CameraConfigUpdate):
+    """Dynamically update live camera worker configuration."""
+    worker = camera_stream_manager.get_worker(camera_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail="Camera stream worker is not currently active")
+
+    if data.conf_threshold is not None:
+        worker.set_confidence(data.conf_threshold)
+
+    return {"status": "ok", "metrics": worker.get_metrics()}
 
 
 @router.patch("/{camera_id}/heartbeat")
@@ -305,37 +667,47 @@ def camera_heartbeat(camera_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/webcam/reset")
-def reset_webcam_session():
-    """Resets persistent tracker and loitering timers for WEBCAM-01 session."""
-    global _webcam_detector, _webcam_tracker, _webcam_threat_engine
+def reset_webcam_session(camera_id: str = "WEBCAM-01"):
+    """Resets persistent tracker and loitering timers for specified camera session."""
+    global _camera_trackers, _camera_threat_engines, _live_dedup_cache
     from ai_engine.tracking.tracker import Tracker
     from ai_engine.intelligence.threat_engine import ThreatEngine
-    _webcam_tracker = Tracker()
-    _webcam_threat_engine = ThreatEngine(camera_id="WEBCAM-01", loitering_threshold=15.0)
-    logger.info("[WebcamAI] Session reset complete.")
-    return {"status": "ok", "message": "Webcam session reset"}
+    from routes.alerts import create_and_broadcast_alert_sync
+
+    _camera_trackers[camera_id] = Tracker()
+    _camera_threat_engines[camera_id] = ThreatEngine(
+        camera_id=camera_id,
+        loitering_threshold=15.0,
+        alert_callback=create_and_broadcast_alert_sync,
+        detection_callback=_handle_live_detection_sync
+    )
+    keys_to_clear = [k for k in _live_dedup_cache.keys() if k[0] == camera_id]
+    for k in keys_to_clear:
+        del _live_dedup_cache[k]
+    logger.info(f"[LiveAI] Session reset complete for camera {camera_id}.")
+    return {"status": "ok", "message": f"Camera session reset for {camera_id}"}
 
 
 
 @router.post("/webcam/infer")
 async def infer_webcam_frame(data: WebcamInferRequest):
     """
-    Real YOLOv8 frame inference for the live browser webcam feed.
+    Real YOLOv8 frame inference for the live browser webcam / USB camera feed.
     - Runs real detector (yolov8n.pt) with internal track=True persistence.
-    - Feeds real Detection objects into Tracker for stable IDs across frames.
+    - Feeds real Detection objects into camera-specific Tracker for stable IDs across frames.
     - Evaluates ThreatEngine.process_tracks() for zone intrusion & loitering.
-    - Only saves genuine Alert events to DB (never raw frame detections).
+    - Emits deduplicated detection events to DB and WebSocket.
     - Returns normalized detections for bounding-box rendering in the browser.
     """
     try:
-        detector, tracker, threat_engine = _get_webcam_ai_instances()
-
-        # Update confidence threshold dynamically from frontend settings
         conf_val = data.conf_threshold / 100.0 if data.conf_threshold > 1.0 else data.conf_threshold
         conf_frac = max(0.05, min(0.95, conf_val))
-        detector.conf_threshold = conf_frac
 
-        # ── Load WEBCAM-01 specific zone and active watchlist from DB ────────
+        detector = _get_shared_detector(conf_threshold=conf_frac)
+        detector.conf_threshold = conf_frac
+        tracker, threat_engine = _get_camera_ai_pipeline(data.camera_id)
+
+        # ── Load camera-specific zone and active watchlist from DB ────────
         from database.database import SessionLocal
         from models.models import Zone
         import json
@@ -377,6 +749,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
 
         # ── Run real YOLOv8 with internal tracking (persist=True) ─────────────
         raw_dets = detector.detect(frame, camera_id=data.camera_id, track=True)
+        logger.info(f"[YOLO] Inference completed: {len(raw_dets)} detections")
 
         if not raw_dets:
             # No objects detected this frame — return empty (clear previous boxes)
@@ -384,18 +757,19 @@ async def infer_webcam_frame(data: WebcamInferRequest):
 
         # ── Update our persistent Tracker (for zone dwell timing) ─────────────
         active_tracks = tracker.update(raw_dets)
+        logger.info(f"[TRACKER] {len(active_tracks)} active tracks")
 
         # ── Evaluate ThreatEngine (zone intrusion + loitering + alert dedup) ──
         import asyncio
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, lambda: threat_engine.process_tracks(active_tracks, video_id=None)
+            None, lambda: threat_engine.process_tracks(active_tracks, video_id=None, frame_bgr=frame)
         )
 
         # ── Build detection response & AI Evaluation ─────────────────────────
         now = datetime.utcnow()
         output_detections = []
-        from shapely.geometry import Point, box
+        from shapely.geometry import Point
         from ai_engine.intelligence.face_engine import get_face_engine
         from ai_engine.intelligence.anpr_engine import get_anpr_engine
         from models.models import ANPREvent
@@ -404,25 +778,8 @@ async def infer_webcam_frame(data: WebcamInferRequest):
         anpr_engine = get_anpr_engine()
 
         for track in active_tracks:
-            # Multi-factor zone check: track.in_zone, point probe (feet, center, chest), or box intersection
-            is_in_zone = bool(track.in_zone)
-            if not is_in_zone and threat_engine.zone_polygon is not None:
-                try:
-                    bx, by = track.bottom_center
-                    cx, cy = track.center
-                    b = track.bbox
-                    if (
-                        threat_engine.zone_polygon.contains(Point(bx, by))
-                        or threat_engine.zone_polygon.contains(Point(cx, cy))
-                        or threat_engine.zone_polygon.contains(Point(cx, b["y"] + b["h"] * 0.35))
-                    ):
-                        is_in_zone = True
-                    else:
-                        track_box = box(b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"])
-                        if threat_engine.zone_polygon.intersects(track_box):
-                            is_in_zone = True
-                except Exception as ze:
-                    logger.debug(f"[WebcamAI] Zone test error: {ze}")
+            bx, by = track.bottom_center
+            is_in_zone = threat_engine.zone_polygon.contains(Point(bx, by)) if threat_engine.zone_polygon is not None else False
 
             # Real Face Recognition on detected PERSON objects
             face_match_info = None
@@ -464,9 +821,10 @@ async def infer_webcam_frame(data: WebcamInferRequest):
                         "similarity": face_eval["similarity"],
                     }
 
-            # Real ANPR on detected VEHICLE objects
+            # Real ANPR on detected VEHICLE objects (CAR, TRUCK, BUS, MOTORCYCLE, VEHICLE)
             plate_info = None
-            if data.anpr_enabled and track.object_type == "VEHICLE":
+            is_vehicle = track.object_type in ["VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE"]
+            if data.anpr_enabled and is_vehicle:
                 plate_eval = anpr_engine.evaluate_vehicle_plate(
                     frame_bgr=frame,
                     vehicle_bbox=track.bbox,
@@ -479,6 +837,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
                     "plate_text": plate_eval.get("plate_text"),
                     "plate_confidence": plate_eval.get("plate_confidence"),
                     "plate_status": plate_eval.get("plate_status", "NOT_DETECTED"),
+                    "plate_bbox": plate_eval.get("plate_bbox"),
                     "vehicle_type": plate_eval.get("vehicle_type", "CAR"),
                 }
 
@@ -508,24 +867,70 @@ async def infer_webcam_frame(data: WebcamInferRequest):
                                 timestamp=now
                             )
                             anpr_db.add(ev)
+
+                            # Check Watchlist Plate Match
+                            norm_plate = plate_eval["plate_text"].replace(" ", "").upper()
+                            wl_match = anpr_db.query(WatchlistPlate).filter(
+                                WatchlistPlate.is_active == True,
+                                WatchlistPlate.plate_number == norm_plate
+                            ).first()
+                            if wl_match:
+                                alert_id_str = f"ALERT-{now.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+                                wl_alert = Alert(
+                                    id=str(uuid.uuid4()),
+                                    alert_id=alert_id_str,
+                                    camera_id=data.camera_id,
+                                    event_type="WATCHLIST_PLATE_MATCH",
+                                    object_type="VEHICLE",
+                                    object_id=f"{track.object_label} (Plate: {plate_eval['plate_text']})",
+                                    threat_level=wl_match.threat_priority or "HIGH",
+                                    reason=f"SUSPECT VEHICLE PLATE DETECTED: {plate_eval['plate_text']} ({wl_match.vehicle_owner or wl_match.reason or 'Wanted vehicle'}) detected on {data.camera_id} with {plate_eval.get('plate_confidence', 0):.1f}% OCR confidence.",
+                                    confidence=plate_eval.get("plate_confidence"),
+                                    bbox_x=track.bbox.get("x", 0.0),
+                                    bbox_y=track.bbox.get("y", 0.0),
+                                    bbox_w=track.bbox.get("w", 0.0),
+                                    bbox_h=track.bbox.get("h", 0.0),
+                                    status="NEW",
+                                    created_at=now,
+                                    updated_at=now,
+                                )
+                                anpr_db.add(wl_alert)
+                                manager.broadcast_sync({
+                                    "type": "NEW_ALERT",
+                                    "data": {
+                                        "id": wl_alert.id,
+                                        "alert_id": wl_alert.alert_id,
+                                        "camera_id": data.camera_id,
+                                        "event_type": "WATCHLIST_PLATE_MATCH",
+                                        "object_id": wl_alert.object_id,
+                                        "threat_level": wl_alert.threat_level,
+                                        "reason": wl_alert.reason,
+                                        "timestamp": now.isoformat(),
+                                    }
+                                })
+
                             anpr_db.commit()
                         anpr_db.close()
                     except Exception as pe:
                         logger.warning(f"[WebcamAI] Error persisting ANPR event: {pe}")
 
-            if track.object_type == "VEHICLE":
+            if is_vehicle:
                 if is_in_zone and threat_engine.zone_name:
                     obj_event = "ZONE_INTRUSION"
                 elif plate_info and plate_info.get("plate_status") == "READABLE":
                     obj_event = "PLATE_DETECTED"
+                elif plate_info and plate_info.get("plate_status") == "UNREADABLE":
+                    obj_event = "UNREADABLE_PLATE"
                 else:
-                    obj_event = "VEHICLE_DETECTED"
+                    obj_event = f"{track.object_type}_DETECTED"
             elif is_in_zone and threat_engine.zone_name:
                 obj_event = "ZONE_INTRUSION"
             elif face_match_info and face_match_info.get("is_match"):
                 obj_event = "WATCHLIST_MATCH"
-            else:
+            elif track.object_type == "PERSON":
                 obj_event = "PERSON_DETECTED"
+            else:
+                obj_event = f"{track.object_type}_DETECTED"
 
             output_detections.append({
                 "id": str(uuid.uuid4()),

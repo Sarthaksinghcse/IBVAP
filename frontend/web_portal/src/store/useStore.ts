@@ -8,7 +8,6 @@ import type {
   AlertStatus,
   Zone,
   WatchlistPerson,
-  AuthUser,
 } from '../types';
 import * as api from '../services/api';
 
@@ -18,7 +17,6 @@ export interface AppSettings {
   showConfidence: boolean;
   alertSound: boolean;
   voiceAlerts: boolean;
-  personBeep?: boolean;
   autoAcknowledge: boolean;
   aiThreshold: number;
   loiteringThreshold: number;
@@ -37,9 +35,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   showConfidence: true,
   alertSound: true,
   voiceAlerts: true,
-  personBeep: true,
   autoAcknowledge: false,
-  aiThreshold: 50,
+  aiThreshold: 30,
   loiteringThreshold: 15,
   storageRetention: 30,
   faceRecognitionEnabled: true,
@@ -49,23 +46,6 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 
 
-
-const DEFAULT_ZONES: Record<string, Zone> = {
-  'WEBCAM-01': {
-    id: 'zone-default-webcam-01',
-    source_id: 'WEBCAM-01',
-    source_type: 'WEBCAM',
-    name: 'Restricted Zone A',
-    coordinates: [
-      [30, 15],
-      [92, 15],
-      [92, 90],
-      [30, 90],
-    ],
-    enabled: true,
-    zone_type: 'RESTRICTED',
-  },
-};
 
 const loadSettingsFromStorage = (): AppSettings => {
   try {
@@ -115,15 +95,6 @@ interface IBVAPState {
   timeFormat: '12h' | '24h';
   theme: 'dark' | 'light' | 'system';
   readAlertIds: string[];
-
-  // --- Face Authentication State ---
-  currentUser: AuthUser | null;
-  token: string | null;
-  isAuthenticated: boolean;
-  isAuthChecking: boolean;
-  login: (token: string, user: AuthUser) => void;
-  logout: () => void;
-  initAuth: () => Promise<void>;
 
   // --- Settings Action ---
   updateSetting: <K extends keyof AppSettings>(key: K, val: AppSettings[K]) => void;
@@ -227,7 +198,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
   alerts: [],
   detections: [],
   cameras: [],
-  zones: { ...DEFAULT_ZONES },
+  zones: {},
   watchlist: [],
   activeTracksBySource: {},
   analytics: null,
@@ -259,59 +230,6 @@ export const useStore = create<IBVAPState>((set, get) => ({
   uploadedVideoName: null,
   pendingVideoBlob: null,
   videoAnalysisMetrics: null,
-
-  // --- Face Authentication State & Methods ---
-  currentUser: null,
-  token: typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null,
-  isAuthenticated: false,
-  isAuthChecking: true,
-
-  login: (token: string, user: AuthUser) => {
-    localStorage.setItem('ibvap_token', token);
-    localStorage.setItem('ibvap_user', JSON.stringify(user));
-    set({ token, currentUser: user, isAuthenticated: true, isAuthChecking: false });
-  },
-
-  logout: () => {
-    localStorage.removeItem('ibvap_token');
-    localStorage.removeItem('ibvap_user');
-    set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
-  },
-
-  initAuth: async () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('ibvap_token') : null;
-    const cachedUser = typeof window !== 'undefined' ? localStorage.getItem('ibvap_user') : null;
-
-    if (!token) {
-      set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
-      return;
-    }
-
-    if (cachedUser) {
-      try {
-        const user = JSON.parse(cachedUser);
-        set({ token, currentUser: user, isAuthenticated: true, isAuthChecking: false });
-      } catch (e) {
-        // Cached parse failed, continue to network fetch
-      }
-    }
-
-    try {
-      const verifiedUser = await api.getMe();
-      localStorage.setItem('ibvap_user', JSON.stringify(verifiedUser));
-      set({ token, currentUser: verifiedUser, isAuthenticated: true, isAuthChecking: false });
-    } catch (err: any) {
-      console.warn('[useStore] Token verification failed:', err);
-      if (err?.response?.status === 401 || err?.response?.status === 403) {
-        localStorage.removeItem('ibvap_token');
-        localStorage.removeItem('ibvap_user');
-        set({ token: null, currentUser: null, isAuthenticated: false, isAuthChecking: false });
-      } else {
-        // Network failure; retain cached session if present
-        set({ isAuthChecking: false });
-      }
-    }
-  },
 
 
   setVideoAnalysisMetrics: (metrics) => {
@@ -418,7 +336,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
 
   // --- Zone Actions ---
   setZones: (zoneList) => {
-    const zoneMap: Record<string, Zone> = { ...DEFAULT_ZONES };
+    const zoneMap: Record<string, Zone> = {};
     for (const z of zoneList) {
       zoneMap[z.source_id] = z;
     }
@@ -448,7 +366,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
   fetchZones: async () => {
     try {
       const data = await api.getZones();
-      const zoneMap: Record<string, Zone> = { ...DEFAULT_ZONES };
+      const zoneMap: Record<string, Zone> = {};
       for (const z of data) {
         zoneMap[z.source_id] = z;
       }
@@ -526,10 +444,25 @@ export const useStore = create<IBVAPState>((set, get) => ({
   fetchCameras: async () => {
     try {
       const cams = await api.getCameras();
-      set((state) => ({
+      const currentSelected = get().selectedCameraId;
+      const targetCamId = currentSelected || (cams.length > 0 ? cams[0].id : '');
+      set({
         cameras: cams,
-        selectedCameraId: state.selectedCameraId || (cams.length > 0 ? cams[0].id : ''),
-      }));
+        selectedCameraId: targetCamId,
+      });
+      if (targetCamId) {
+        api.getDetections(targetCamId, undefined, 100)
+          .then((dets) => {
+            if (dets && dets.length > 0) {
+              set((state) => {
+                const existingIds = new Set(state.detections.map((d) => d.id));
+                const newDets = dets.filter((d) => !existingIds.has(d.id));
+                return { detections: [...newDets, ...state.detections].slice(0, 500) };
+              });
+            }
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       console.warn('[useStore] Failed to fetch cameras:', e);
     }
@@ -568,7 +501,22 @@ export const useStore = create<IBVAPState>((set, get) => ({
     set({ wsConnected }),
 
   // --- UI Actions ---
-  setSelectedCamera: (selectedCameraId) => set({ selectedCameraId }),
+  setSelectedCamera: (selectedCameraId) => {
+    set({ selectedCameraId });
+    if (selectedCameraId) {
+      api.getDetections(selectedCameraId, undefined, 100)
+        .then((dets) => {
+          if (dets && dets.length > 0) {
+            set((state) => {
+              const existingIds = new Set(state.detections.map((d) => d.id));
+              const newDets = dets.filter((d) => !existingIds.has(d.id));
+              return { detections: [...newDets, ...state.detections].slice(0, 500) };
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  },
   setSelectedAlert: (selectedAlertId) => set({ selectedAlertId }),
   setUploadProgress: (uploadProgress) => set({ uploadProgress }),
   setUploadStatus: (uploadStatus) => set({ uploadStatus }),

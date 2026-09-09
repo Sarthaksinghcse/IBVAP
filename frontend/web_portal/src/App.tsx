@@ -1,9 +1,6 @@
 import { useEffect } from 'react';
-import { BrowserRouter, HashRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
-import { ProtectedRoute } from './components/auth/ProtectedRoute';
-import FaceLogin from './pages/FaceLogin';
-import FaceRegister from './pages/FaceRegister';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './store/useStore';
 import Dashboard     from './pages/Dashboard';
@@ -17,39 +14,12 @@ import Analytics     from './pages/Analytics';
 import SystemStatus  from './pages/SystemStatus';
 import Settings      from './pages/Settings';
 
-// ─── Detect Electron ─────────────────────────────────────────────────────────
-
-declare global {
-  interface Window {
-    electronAPI?: {
-      isDesktop: boolean;
-      showNotification: (title: string, body: string, urgency?: string) => void;
-      minimizeToTray: () => void;
-      getAppVersion: () => Promise<string>;
-      onNavigate: (callback: (route: string) => void) => void;
-    };
-  }
-}
-
-const isElectron = !!(window as any).electronAPI?.isDesktop;
-
-// Choose router based on environment
-// Electron uses file:// protocol which doesn't support browser history routing
-const Router = isElectron ? HashRouter : BrowserRouter;
-
-// ─── Inner App (needs to be inside Router for hooks) ─────────────────────────
+// ─── Inner App (needs to be inside BrowserRouter for hooks) ──────────────────
 
 function AppRoutes() {
   // Start WebSocket (or mock engine) — called once at root level
   useWebSocket();
   const theme = useStore((s) => s.theme);
-  const navigate = useNavigate();
-  const initAuth = useStore((s) => s.initAuth);
-
-  // Initialize Auth state from stored JWT
-  useEffect(() => {
-    initAuth();
-  }, [initAuth]);
 
   useEffect(() => {
     if (theme === 'light') {
@@ -63,29 +33,10 @@ function AppRoutes() {
     }
   }, [theme]);
 
-  // Listen for navigation commands from Electron tray menu
-  useEffect(() => {
-    if (window.electronAPI?.onNavigate) {
-      window.electronAPI.onNavigate((route: string) => {
-        navigate(route);
-      });
-    }
-  }, [navigate]);
-
   return (
-    <Routes>
-      {/* Public Face Authentication Routes */}
-      <Route path="/login" element={<FaceLogin />} />
-      <Route path="/register" element={<FaceRegister />} />
 
-      {/* Protected Surveillance Application */}
-      <Route
-        element={
-          <ProtectedRoute>
-            <Layout />
-          </ProtectedRoute>
-        }
-      >
+    <Routes>
+      <Route element={<Layout />}>
         <Route index             element={<Dashboard />} />
         <Route path="monitoring" element={<LiveMonitoring />} />
         <Route path="alerts">
@@ -98,20 +49,21 @@ function AppRoutes() {
         <Route path="analytics" element={<Analytics />} />
         <Route path="system"    element={<SystemStatus />} />
         <Route path="settings"  element={<Settings />} />
+        {/* Fallback */}
+        <Route path="*" element={<Dashboard />} />
       </Route>
-
-      {/* Fallback */}
-      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
+
+
 
 // ─── Root App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
-    <Router>
+    <BrowserRouter>
       <AppRoutes />
-    </Router>
+    </BrowserRouter>
   );
 }

@@ -10,8 +10,6 @@ import { useCameras } from '../hooks/useCameras';
 import { useAlerts } from '../hooks/useAlerts';
 import { useAnalytics } from '../hooks/useAnalytics';
 import { formatEventTime } from '../utils/time';
-import bgImage from '../assets/bg.png';
-import logoImg from '../assets/logo.png';
 
 export default function Dashboard() {
   useCameras();
@@ -58,21 +56,26 @@ export default function Dashboard() {
     ? true
     : (cameras.find((c) => c.id === selectedCameraId)?.status === 'ONLINE');
 
-  // UNIQUE ACTIVE PERSON & VEHICLE TRACKS
+  // UNIQUE ACTIVE PERSON, VEHICLE & ANIMAL TRACKS
   const currentActivePeople = isSourceStreaming
     ? new Set(currentActiveTracks.filter((d) => d.object_type === 'PERSON').map((d) => d.object_id)).size
     : 0;
 
   const currentActiveVehicles = isSourceStreaming
-    ? new Set(currentActiveTracks.filter((d) => d.object_type === 'VEHICLE').map((d) => d.object_id)).size
+    ? new Set(currentActiveTracks.filter((d) => ['VEHICLE', 'CAR', 'TRUCK', 'BUS', 'MOTORCYCLE', 'BICYCLE'].includes(d.object_type)).map((d) => d.object_id)).size
+    : 0;
+
+  const currentActiveAnimals = isSourceStreaming
+    ? new Set(currentActiveTracks.filter((d) => ['ANIMAL', 'DOG', 'CAT', 'BIRD', 'HORSE', 'COW', 'SHEEP'].includes(d.object_type)).map((d) => d.object_id)).size
     : 0;
 
   const activeCams    = getActiveCamerasCount(cameras, isWebcamActive, activeCameraStream);
   const totalCams     = getTotalCamerasCount(cameras, isWebcamActive, activeCameraStream);
 
-  // If 0 cameras connected, metrics reflect zero active streams
+  // If 0 cameras connected or no visible objects, metrics reflect 0
   const peopleCount = isSourceStreaming ? currentActivePeople : (activeCams > 0 ? (analytics?.people_count ?? 0) : 0);
   const vehicleCount = isSourceStreaming ? currentActiveVehicles : (activeCams > 0 ? (analytics?.vehicle_count ?? 0) : 0);
+  const animalCount = isSourceStreaming ? currentActiveAnimals : 0;
   const loiteringCount = activeCams > 0 ? (analytics?.loitering_count ?? sourceAlerts.filter((a) => a.event_type === 'LOITERING').length) : 0;
 
   const criticalAlerts = sourceAlerts.filter((a) => a.threat_level === 'CRITICAL' && a.status !== 'RESOLVED');
@@ -82,7 +85,7 @@ export default function Dashboard() {
   const detections = useStore((s) => s.detections);
   const avgConfidenceStr = detections.length > 0
     ? `${(detections.reduce((sum, d) => sum + (typeof d.confidence === 'number' ? d.confidence : 0), 0) / detections.length).toFixed(1)}%`
-    : '98.7%';
+    : '0.0%';
 
   // Threat Breakdown for Donut Chart
   const tb = analytics?.threat_breakdown;
@@ -113,32 +116,16 @@ export default function Dashboard() {
   const sectorDisplayName = settings.sectorName || 'Drass';
 
   return (
-    <div
-      className="space-y-4 pb-8 select-none relative -m-4 p-4 lg:-m-6 lg:p-6 min-h-[calc(100vh-80px)] rounded-2xl transition-all duration-300"
-      style={{
-        backgroundImage: `linear-gradient(to bottom, rgba(8, 9, 12, 0.84), rgba(8, 9, 12, 0.94)), url(${bgImage})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center top',
-        backgroundAttachment: 'fixed',
-        backgroundRepeat: 'no-repeat',
-      }}
-    >
+    <div className="space-y-4 pb-8 select-none">
 
       {/* ── 1. HOME HEADER (SEAMLESS MOUNTAIN, FLAG & WATCHTOWER LANDSCAPE) ──── */}
       <div className="relative flex items-end justify-between min-h-[145px] md:min-h-[165px] pb-1 overflow-visible select-none">
-        {/* Left Title & Status with Official Shield Emblem */}
+        {/* Left Title & Status */}
         <div className="relative z-10 pb-2">
-          <div className="flex items-center gap-3">
-            <img
-              src={logoImg}
-              alt="SHIELD Emblem"
-              className="w-9 h-9 object-contain drop-shadow-md flex-shrink-0"
-            />
-            <h1 className="text-3xl font-extrabold text-white light:text-slate-900 font-sans tracking-tight leading-none">
-              Home
-            </h1>
-          </div>
-          <div className="flex items-center gap-2 mt-2 ml-0.5">
+          <h1 className="text-3xl font-extrabold text-white light:text-slate-900 font-sans tracking-tight leading-none">
+            Home
+          </h1>
+          <div className="flex items-center gap-2 mt-2">
             <span className="text-xs font-medium text-[#9aa2b5] light:text-slate-600">
               Sector {sectorDisplayName}
             </span>
@@ -150,15 +137,15 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right: Mountain + Indian Flag + Watchtower Artwork (User BG Image) */}
-        <div className="absolute right-0 bottom-0 h-[155px] md:h-[175px] w-full max-w-[820px] flex items-end justify-end pointer-events-none overflow-hidden rounded-r-2xl">
+        {/* Right: Mountain + Indian Flag + Watchtower Artwork */}
+        <div className="absolute right-0 bottom-0 h-[150px] md:h-[170px] w-full max-w-[780px] flex items-end justify-end pointer-events-none overflow-hidden">
           <img
-            src={bgImage}
+            src="/shield_bg_artwork.png"
             alt="SHIELD Indian Border Visual"
-            className="h-full w-auto object-cover object-bottom drop-shadow-lg opacity-90 rounded-r-2xl"
+            className="h-full w-auto object-contain object-bottom object-right drop-shadow-sm"
           />
           {/* Soft gradient fade towards left background */}
-          <div className="absolute inset-0 bg-gradient-to-r from-[#08090c] via-[#08090c]/50 to-transparent pointer-events-none w-72" />
+          <div className="absolute inset-0 bg-gradient-to-r from-[var(--bg-page)] via-[var(--bg-page)]/20 to-transparent pointer-events-none w-48" />
         </div>
       </div>
 
@@ -206,8 +193,8 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right: 2x2 Metric Cards Grid */}
-        <div className="lg:col-span-6 grid grid-cols-2 gap-3">
+        {/* Right: 2x2/3x2 Metric Cards Grid */}
+        <div className="lg:col-span-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 gap-3">
 
           {/* Metric 1: Cameras Online */}
           <div className="bg-[#121419] light:bg-white border border-[#272b37] light:border-[#d9dde3] rounded-2xl p-4 flex flex-col justify-between hover:border-[#40475b] light:hover:border-slate-400 transition-all shadow-card">
@@ -289,6 +276,25 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {/* Metric 5: Registry Hits */}
+          <div className="bg-[#121419] light:bg-white border border-[#272b37] light:border-[#d9dde3] rounded-2xl p-4 flex flex-col justify-between hover:border-[#40475b] light:hover:border-slate-400 transition-all shadow-card md:col-span-2 lg:col-span-1">
+            <div className="flex items-center justify-between">
+              <div className="w-8 h-8 rounded-xl bg-red-900/30 text-red-500 border border-red-500/30 light:bg-red-50 light:text-red-600 light:border-red-200 flex items-center justify-center">
+                <Target size={16} />
+              </div>
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-red-900/30 text-red-400 border border-red-500/30 light:bg-red-100 light:text-red-700 light:border-red-300">
+                {sourceAlerts.filter(a => a.event_type === 'WATCHLIST_MATCH' || a.event_type === 'WATCHLIST_PLATE_MATCH').length > 0 ? 'Match Found' : 'Clear'}
+              </span>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-extrabold font-mono text-white light:text-slate-900 tracking-tight">
+                {sourceAlerts.filter(a => a.event_type === 'WATCHLIST_MATCH' || a.event_type === 'WATCHLIST_PLATE_MATCH').length}
+              </div>
+              <div className="text-xs font-semibold text-[#9aa2b5] light:text-slate-600 mt-0.5">
+                Registry Hits Today
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

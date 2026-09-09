@@ -5,7 +5,6 @@ Handles registration of persons of interest with real face detection,
 SFace 128-D embedding extraction, persistence in SQLite, and test matching.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
@@ -35,29 +34,6 @@ STORAGE_DIR = os.path.join(
 )
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-# Storage directory for face crops (outside public static mount)
-FACE_CROPS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "storage", "face_crops"
-)
-os.makedirs(FACE_CROPS_DIR, exist_ok=True)
-
-
-@router.get("/face-crops/{filename}")
-def get_face_crop(filename: str):
-    """Serves harvested face crops through the watchlist API rather than public static mount."""
-    file_path = os.path.join(FACE_CROPS_DIR, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Face crop not found")
-    return FileResponse(file_path)
-
-
-# Global version counter for watchlist caching
-_watchlist_version = 1
-
-def _increment_version():
-    global _watchlist_version
-    _watchlist_version += 1
 
 def _load_active_watchlist_records(db: Session) -> List[dict]:
     """Helper to fetch all active watchlist persons and their parsed 128-D embeddings."""
@@ -78,32 +54,6 @@ def _load_active_watchlist_records(db: Session) -> List[dict]:
                 logger.warning(f"[Watchlist] Error parsing embedding for person {p.id}: {e}")
     return records
 
-
-@router.get("/version")
-def get_watchlist_version():
-    return {"version": _watchlist_version}
-
-@router.get("/embeddings")
-def get_watchlist_embeddings(db: Session = Depends(get_db)):
-    records = _load_active_watchlist_records(db)
-    # Numpy arrays need to be converted to list for JSON serialization
-    serialized_records = []
-    for r in records:
-        r_copy = dict(r)
-        r_copy["embedding"] = r["embedding"].tolist()
-        serialized_records.append(r_copy)
-    return {"version": _watchlist_version, "records": serialized_records}
-
-@router.get("/events")
-def get_watchlist_events(limit: int = 100, db: Session = Depends(get_db)):
-    events = db.query(FaceRecognitionEvent).order_by(FaceRecognitionEvent.timestamp.desc()).limit(limit).all()
-    return events
-
-@router.get("/unknown-faces")
-def get_unknown_faces(days: int = 7, min_sightings: int = 2, db: Session = Depends(get_db)):
-    # Mock implementation of unknown face clustering for FaceReview.tsx
-    # A real implementation would cluster all event embeddings where event_type == 'UNKNOWN_FACE'
-    return {"clusters": [], "total_unknown": 0}
 
 @router.get("/", response_model=List[WatchlistPersonResponse])
 def list_watchlist_persons(db: Session = Depends(get_db)):
@@ -160,7 +110,7 @@ async def register_watchlist_person(
 
     # Run real Face Detection & Embedding Extraction
     face_engine = get_face_engine()
-    success, embedding, error_msg, quality_score = face_engine.process_registration_image(img_bgr)
+    success, embedding, error_msg = face_engine.process_registration_image(img_bgr)
 
     if not success or embedding is None:
         raise HTTPException(
@@ -207,7 +157,6 @@ async def register_watchlist_person(
 
     # Clear face cache to ensure instant recognition on next frame
     face_engine.clear_cache()
-    _increment_version()
 
     return WatchlistPersonResponse(
         id=person.id,
@@ -243,23 +192,6 @@ def get_watchlist_person(person_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/{person_id}/photo")
-def get_watchlist_person_photo(person_id: str, db: Session = Depends(get_db)):
-    """Serves the enrolled photo for a watchlist target."""
-    person = db.query(WatchlistPerson).filter(WatchlistPerson.id == person_id).first()
-    if not person:
-        raise HTTPException(status_code=404, detail="Watchlist person not found")
-    if not person.photo_path:
-        raise HTTPException(status_code=404, detail="Person has no photo registered")
-
-    filename = os.path.basename(person.photo_path)
-    file_path = os.path.join(STORAGE_DIR, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Photo file not found on disk")
-
-    return FileResponse(file_path)
-
-
 @router.patch("/{person_id}", response_model=WatchlistPersonResponse)
 def update_watchlist_person(person_id: str, data: WatchlistPersonUpdate, db: Session = Depends(get_db)):
     person = db.query(WatchlistPerson).filter(WatchlistPerson.id == person_id).first()
@@ -282,7 +214,6 @@ def update_watchlist_person(person_id: str, data: WatchlistPersonUpdate, db: Ses
     db.refresh(person)
 
     get_face_engine().clear_cache()
-    _increment_version()
     return WatchlistPersonResponse(
         id=person.id,
         name=person.name,
@@ -318,7 +249,6 @@ def delete_watchlist_person(person_id: str, db: Session = Depends(get_db)):
     db.commit()
 
     get_face_engine().clear_cache()
-    _increment_version()
     logger.info(f"[Watchlist] Deleted person {person_id}")
     return {"status": "ok", "message": f"Person {person_id} deleted from watchlist"}
 
@@ -376,7 +306,7 @@ async def test_face_match(
             message="Face detected. No active targets registered in Watchlist database."
         )
 
-    is_match, pid, pname, ident, priority, sim_pct, cos_score, top_candidates = face_engine.match_against_watchlist(
+    is_match, pid, pname, ident, priority, sim_pct, cos_score = face_engine.match_against_watchlist(
         embedding, watchlist_records, threshold=threshold or 0.45
     )
 
@@ -395,19 +325,3 @@ async def test_face_match(
         threshold_used=threshold or 0.45,
         message=msg
     )
-
-
-@router.get("/{person_id}/photo")
-def get_watchlist_photo(person_id: str, db: Session = Depends(get_db)):
-    """Serves the enrolled photo for a watchlist person."""
-    person = db.query(WatchlistPerson).filter(WatchlistPerson.id == person_id).first()
-    if not person or not person.photo_path:
-        raise HTTPException(status_code=404, detail="Photo not found for this person.")
-    
-    filename = os.path.basename(person.photo_path)
-    photo_abs = os.path.join(STORAGE_DIR, filename)
-    if not os.path.isfile(photo_abs):
-        raise HTTPException(status_code=404, detail="Photo file not found on disk.")
-    
-    return FileResponse(photo_abs)
-

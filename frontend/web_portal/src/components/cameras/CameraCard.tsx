@@ -1,5 +1,5 @@
 import { format } from 'date-fns';
-import { Camera, WifiOff, Cpu, Clock, ShieldAlert, Video, Smartphone, Trash2, Radio } from 'lucide-react';
+import { Camera, WifiOff, Cpu, Clock, ShieldAlert, Video, Smartphone, Trash2, Radio, Usb } from 'lucide-react';
 import { CameraStatusBadge, AIStatusBadge } from '../ui/Badge';
 import { useStore } from '../../store/useStore';
 import type { Camera as CameraType } from '../../types';
@@ -86,15 +86,31 @@ export function CameraCard({ camera, isSelected, onClick, onConfigureZone, onDel
         <div className="absolute top-2 left-2 flex items-center gap-1.5 z-10">
           <span
             className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase border flex items-center gap-1 ${
-              sourceType === 'WEBCAM'
+              sourceType === 'USB_PHONE'
+                ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                : sourceType === 'WEBCAM'
                 ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
                 : sourceType === 'PHONE'
                 ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
                 : 'bg-blue-500/20 border-blue-500/40 text-blue-400'
             }`}
           >
-            {sourceType === 'WEBCAM' ? <Camera size={9} /> : sourceType === 'PHONE' ? <Smartphone size={9} /> : <Video size={9} />}
-            {sourceType === 'PHONE' ? 'PHONE / WIFI' : sourceType === 'WEBCAM' ? 'LAPTOP WEBCAM' : 'CCTV'}
+            {sourceType === 'USB_PHONE' ? (
+              <Usb size={9} />
+            ) : sourceType === 'WEBCAM' ? (
+              <Camera size={9} />
+            ) : sourceType === 'PHONE' ? (
+              <Smartphone size={9} />
+            ) : (
+              <Video size={9} />
+            )}
+            {sourceType === 'USB_PHONE'
+              ? 'USB PHONE'
+              : sourceType === 'PHONE'
+              ? 'PHONE / WIFI'
+              : sourceType === 'WEBCAM'
+              ? 'LAPTOP WEBCAM'
+              : 'CCTV'}
           </span>
 
           {isOnline && isRunning && (

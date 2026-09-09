@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
@@ -14,21 +14,9 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 engine = create_engine(
     DATABASE_URL,
-    # Phase 1.5 (I2): Add busy timeout to prevent "database is locked" during
-    # concurrent access from video worker threads and FastAPI request threads.
-    connect_args={"check_same_thread": False, "timeout": 30},
+    connect_args={"check_same_thread": False},  # SQLite requires this
     echo=False,
 )
-
-# Phase 1.5 (I2): Enable WAL journal mode on every new connection.
-# WAL allows concurrent readers + one writer without blocking, preventing
-# the "database is locked" error when a long-running video job holds the DB.
-@event.listens_for(engine, "connect")
-def _set_sqlite_pragmas(dbapi_conn, connection_record):
-    cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=30000")
-    cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
