@@ -127,7 +127,12 @@ class CameraStreamWorker:
             alert_callback=create_and_broadcast_alert_sync,
             detection_callback=None
         )
-        self.detector = get_shared_detector()
+        # Only a live feed needs a detector. Constructing one imports ultralytics
+        # and loads the YOLO weights, which a playback source never uses because
+        # its AI loop does not run and its overlays are already rendered. Keeping
+        # it lazy means the demo feed still plays on a machine without the AI
+        # dependencies installed.
+        self.detector = None if self.is_playback else get_shared_detector()
 
         # Deduplication state: track_id -> last_logged_time
         self._logged_tracks: Dict[int, float] = {}
@@ -684,6 +689,20 @@ class CameraStreamWorker:
                 is_low_light_active = False
                 cur_brightness = 0.0
                 cur_gamma = 1.0
+
+                # last_sent_seq was previously assigned but never compared, so the
+                # generator re-encoded and re-sent whatever frame was current on
+                # every pass. For a live camera the 40ms sleep hid it; a playback
+                # source paced at its own frame rate ended up emitting each frame
+                # twice over, so a 30fps clip streamed at ~67fps.
+                stale = False
+                with self._frame_lock:
+                    if self._latest_frame is not None and self._frame_seq == last_sent_seq:
+                        stale = True
+
+                if stale:
+                    time.sleep(0.004)
+                    continue
 
                 with self._frame_lock:
                     if self._latest_frame is not None:

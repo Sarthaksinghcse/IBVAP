@@ -261,13 +261,22 @@ function createTray() {
 
 function checkPython() {
   // 1. Scan candidate roots for project venv
-  const candidateRoots = [
-    path.join(__dirname, '..', '..'),
-    path.join(process.resourcesPath, '..'),
-    path.join(process.resourcesPath, '..', '..', '..', '..'),
-    process.cwd(),
-    path.join(process.cwd(), '..')
-  ];
+  // Walk upwards from each plausible starting point rather than guessing a
+  // fixed number of '..' hops. A packaged build sits at
+  // <repo>/frontend/desktop/dist/win-unpacked/resources, which is five levels
+  // below the repo root that holds venv/ - one deeper than the old fixed list
+  // reached, so it silently fell through to system Python.
+  const seeds = [__dirname, process.resourcesPath, process.cwd()].filter(Boolean);
+  const candidateRoots = [];
+  for (const seed of seeds) {
+    let dir = seed;
+    for (let i = 0; i < 7; i++) {
+      if (!candidateRoots.includes(dir)) candidateRoots.push(dir);
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
 
   for (const root of candidateRoots) {
     const venvPaths = [
