@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './store/useStore';
 import Dashboard     from './pages/Dashboard';
@@ -34,25 +35,29 @@ function AppRoutes() {
   }, [theme]);
 
   return (
-
-    <Routes>
-      <Route element={<Layout />}>
-        <Route index             element={<Dashboard />} />
-        <Route path="monitoring" element={<LiveMonitoring />} />
-        <Route path="alerts">
-          <Route index          element={<Alerts />} />
-          <Route path="history" element={<AlertHistory />} />
+    <ErrorBoundary
+      fallbackTitle="SHIELD Application Viewport"
+      fallbackMessage="An unexpected issue occurred in the primary view. The navigation and background services remain active."
+    >
+      <Routes>
+        <Route element={<Layout />}>
+          <Route index             element={<Dashboard />} />
+          <Route path="monitoring" element={<LiveMonitoring />} />
+          <Route path="alerts">
+            <Route index          element={<Alerts />} />
+            <Route path="history" element={<AlertHistory />} />
+          </Route>
+          <Route path="watchlist" element={<Watchlist />} />
+          <Route path="cameras"   element={<Cameras />} />
+          <Route path="map"       element={<MapPage />} />
+          <Route path="analytics" element={<Analytics />} />
+          <Route path="system"    element={<SystemStatus />} />
+          <Route path="settings"  element={<Settings />} />
+          {/* Fallback */}
+          <Route path="*" element={<Dashboard />} />
         </Route>
-        <Route path="watchlist" element={<Watchlist />} />
-        <Route path="cameras"   element={<Cameras />} />
-        <Route path="map"       element={<MapPage />} />
-        <Route path="analytics" element={<Analytics />} />
-        <Route path="system"    element={<SystemStatus />} />
-        <Route path="settings"  element={<Settings />} />
-        {/* Fallback */}
-        <Route path="*" element={<Dashboard />} />
-      </Route>
-    </Routes>
+      </Routes>
+    </ErrorBoundary>
   );
 }
 
@@ -67,3 +72,4 @@ export default function App() {
     </BrowserRouter>
   );
 }
+

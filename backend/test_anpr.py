@@ -109,7 +109,7 @@ def run_all_tests():
     cv2.rectangle(clean_plate_img, (0, 0), (100, 32), (0, 0, 0), 2)
     cv2.putText(clean_plate_img, "DL01AB", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
 
-    text, conf, status = anpr_eng.recognize_plate(clean_plate_img)
+    text, conf, status, *_ = anpr_eng.recognize_plate(clean_plate_img)
     assert text is not None and len(text) >= 4, f"OCR returned invalid text: '{text}'"
     assert conf >= 70.0, f"Expected confidence >= 70.0%, got {conf}%"
     assert status == "READABLE", f"Expected READABLE status, got {status}"
@@ -121,7 +121,7 @@ def run_all_tests():
     cv2.putText(blurred_plate_img, "DL01AB", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
     blurred_plate_img = cv2.GaussianBlur(blurred_plate_img, (25, 25), 11.0) # extreme blur
 
-    b_text, b_conf, b_status = anpr_eng.recognize_plate(blurred_plate_img)
+    b_text, b_conf, b_status, *_ = anpr_eng.recognize_plate(blurred_plate_img)
     # Either returns UNREADABLE or UNCERTAIN with low conf — never a fake confident match
     assert b_status in ["UNREADABLE", "UNCERTAIN"] or (b_text is None), f"Unexpected status for blurred plate: {b_status}"
     print(f"[PASS] Blurred plate correctly classified as {b_status} (Zero fake text hallucinated).")

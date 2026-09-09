@@ -105,11 +105,25 @@ export function VideoStatusBadge({ status }: { status: VideoStatus }) {
 
 // ─── Live Indicator Badge ──────────────────────────────────────────────────────
 
-export function LiveBadge() {
+interface LiveBadgeProps {
+  active?: boolean;
+  label?: string;
+}
+
+export function LiveBadge({ active = true, label = 'LIVE' }: LiveBadgeProps) {
+  if (!active) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-mono font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/30 light:bg-slate-100 light:text-slate-600 light:border-slate-300 uppercase tracking-wider">
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+        OFFLINE
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 light:bg-emerald-50 light:text-emerald-700 light:border-emerald-200 uppercase tracking-wider">
       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)] animate-pulse" />
-      LIVE
+      {label}
     </span>
   );
 }

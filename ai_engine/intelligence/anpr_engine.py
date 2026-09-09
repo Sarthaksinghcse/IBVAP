@@ -52,17 +52,7 @@ class ANPREngine:
 
         if models_dir is None:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            candidates = [
-                os.path.normpath(os.path.join(base_dir, "models")),
-                os.path.normpath(os.path.join(base_dir, "..", "models")),
-                os.path.normpath(os.path.join(os.getcwd(), "models")),
-                os.path.normpath(r"C:\Users\thaku\OneDrive\Desktop\IBVAP\models"),
-            ]
-            models_dir = candidates[0]
-            for c in candidates:
-                if os.path.exists(c) and os.path.isdir(c):
-                    models_dir = c
-                    break
+            models_dir = os.path.join(base_dir, "models")
 
         self.models_dir = models_dir
         self.tesseract_available = False
@@ -89,10 +79,17 @@ class ANPREngine:
                 self.tesseract_available = True
                 logger.info(f"[ANPREngine] Local Tesseract OCR initialized from {TESSERACT_CMD}")
             else:
-                # Check default system path
-                self.pytesseract = pytesseract
-                self.tesseract_available = True
-                logger.info("[ANPREngine] Tesseract OCR module loaded (system path)")
+                import shutil
+                which_tess = shutil.which("tesseract")
+                if which_tess:
+                    pytesseract.pytesseract.tesseract_cmd = which_tess
+                    self.pytesseract = pytesseract
+                    self.tesseract_available = True
+                    logger.info(f"[ANPREngine] Tesseract OCR loaded from PATH: {which_tess}")
+                else:
+                    self.pytesseract = pytesseract
+                    self.tesseract_available = True
+                    logger.info("[ANPREngine] Tesseract OCR module loaded")
         except Exception as e:
             logger.warning(f"[ANPREngine] Tesseract initialization failed: {e}")
             self.tesseract_available = False
@@ -141,12 +138,13 @@ class ANPREngine:
     def locate_plate_region(self, vehicle_crop: np.ndarray) -> Tuple[bool, Optional[np.ndarray], Optional[dict]]:
         """
         High-accuracy license plate localizer on vehicle bumper ROI:
-        1. Constrains candidate search to lower vehicle bumper (height 45%-95%, width 15%-85%).
+        1. Constrains candidate search to vehicle bumper (height 48%-96%, width 12%-88%).
         2. Applies dual-mode candidate isolation:
            - Color segmentation for reflective white/yellow license plates.
            - Sobel horizontal gradient filter for vertical alphanumeric edge clusters.
-        3. Validates aspect ratio (2.0 - 6.0), minimum dimensions, and text edge variance.
-        4. Returns: (plate_found, plate_crop_bgr, relative_bbox_dict)
+        3. Prioritizes reflective plate candidates to reject dark engine grilles.
+        4. Validates aspect ratio (2.0 - 6.0), minimum dimensions, and text edge variance.
+        5. Returns: (plate_found, plate_crop_bgr, relative_bbox_dict)
         """
         if vehicle_crop is None or vehicle_crop.size == 0:
             return False, None, None
@@ -168,13 +166,27 @@ class ANPREngine:
             by1, bx1 = 0, 0
             bh, bw = vh, vw
 
-        gray_bumper = cv2.cvtColor(bumper, cv2.COLOR_BGR2GRAY)
+        # Adaptive low-light bumper luminance enhancement:
+        # If bumper crop is dark (brightness < 60.0), apply localized CLAHE to luminance
+        # so reflective license plate and vertical alphanumeric edges are clearly segmented
+        bumper_brightness = float(cv2.cvtColor(bumper, cv2.COLOR_BGR2GRAY).mean())
+        if bumper_brightness < 60.0:
+            bumper_lab = cv2.cvtColor(bumper, cv2.COLOR_BGR2LAB)
+            bl, ba, bb = cv2.split(bumper_lab)
+            clahe_bumper = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(6, 6))
+            bl_enh = clahe_bumper.apply(bl)
+            bumper_proc = cv2.cvtColor(cv2.merge([bl_enh, ba, bb]), cv2.COLOR_LAB2BGR)
+            gray_bumper = cv2.cvtColor(bumper_proc, cv2.COLOR_BGR2GRAY)
+            hsv_bumper = cv2.cvtColor(bumper_proc, cv2.COLOR_BGR2HSV)
+        else:
+            gray_bumper = cv2.cvtColor(bumper, cv2.COLOR_BGR2GRAY)
+            hsv_bumper = cv2.cvtColor(bumper, cv2.COLOR_BGR2HSV)
+
         candidates = []
 
         # --- Method 1: White & Yellow Reflective Plate Color Mask ---
-        hsv_bumper = cv2.cvtColor(bumper, cv2.COLOR_BGR2HSV)
         white_mask = cv2.inRange(hsv_bumper, np.array([0, 0, 140]), np.array([180, 80, 255]))
-        yellow_mask = cv2.inRange(hsv_bumper, np.array([14, 60, 130]), np.array([36, 255, 255]))
+        yellow_mask = cv2.inRange(hsv_bumper, np.array([14, 50, 130]), np.array([36, 255, 255]))
         color_mask = cv2.bitwise_or(white_mask, yellow_mask)
 
         kernel_morph = cv2.getStructuringElement(cv2.MORPH_RECT, (13, 3))
@@ -185,12 +197,12 @@ class ANPREngine:
             cx, cy, cw, ch = cv2.boundingRect(cnt)
             ar = cw / float(ch) if ch > 0 else 0
             area = cw * ch
-            # Standard Indian plate aspect ratio is between 2.2 and 5.5
-            if 2.0 <= ar <= 6.0 and cw >= 32 and ch >= 9 and area >= 350:
+            # Standard Indian plate aspect ratio is between 2.0 and 6.0; reject full-width grilles
+            if 2.0 <= ar <= 6.0 and cw >= 28 and 8 <= ch <= 48 and cw <= int(bw * 0.75) and area >= 260:
                 crop_gray = gray_bumper[cy:cy+ch, cx:cx+cw]
                 std = float(np.std(crop_gray))
-                if std > 14.0:
-                    score = std * (1.0 - abs(ar - 3.4) / 7.0)
+                if std > 12.0:
+                    score = std * (1.0 - abs(ar - 3.4) / 7.0) * 1.6
                     candidates.append((score, cx, cy, cw, ch))
 
         # --- Method 2: Sobel Horizontal Gradient (Vertical text edges) ---
@@ -198,7 +210,9 @@ class ANPREngine:
         grad_x = np.absolute(grad_x)
         g_min, g_max = np.min(grad_x), np.max(grad_x)
         if g_max > g_min:
-            grad_x = ((grad_x - g_min) / (g_max - g_min) * 255).astype("uint8")
+            grad_x = ((grad_x - g_min) / (g_max - g_min) * 255.0).astype("uint8")
+        else:
+            grad_x = np.zeros_like(gray_bumper, dtype=np.uint8)
 
         blurred = cv2.GaussianBlur(grad_x, (5, 5), 0)
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -210,23 +224,22 @@ class ANPREngine:
             gx, gy, gw, gh = cv2.boundingRect(cnt)
             ar = gw / float(gh) if gh > 0 else 0
             area = gw * gh
-            if 2.0 <= ar <= 6.2 and gw >= 35 and gh >= 9 and area >= 380:
+            if 2.0 <= ar <= 6.2 and gw >= 35 and 9 <= gh <= 48 and gw <= int(bw * 0.75) and area >= 350:
                 crop_gray = gray_bumper[gy:gy+gh, gx:gx+gw]
                 std = float(np.std(crop_gray))
-                if std > 15.0:
+                if std > 14.0:
                     score = std * (1.0 - abs(ar - 3.4) / 7.0) * 0.95
                     candidates.append((score, gx, gy, gw, gh))
 
         if not candidates:
-            # Fallback: check full vehicle lower half if bumper crop missed
             return False, None, None
 
         # Sort candidates by score descending
         candidates.sort(key=lambda c: c[0], reverse=True)
         _, px, py, pw, ph = candidates[0]
 
-        # Add slight proportional padding (5% horizontal, 8% vertical) to ensure characters are not clipped
-        pad_x = int(pw * 0.06)
+        # Add proportional padding to ensure characters are not clipped
+        pad_x = int(pw * 0.08)
         pad_y = int(ph * 0.08)
         px1 = max(0, px - pad_x)
         py1 = max(0, py - pad_y)
@@ -246,39 +259,37 @@ class ANPREngine:
 
     def generate_plate_variants(self, plate_crop: np.ndarray) -> List[np.ndarray]:
         """
-        Upscales plate crop (2x-3x) and applies multi-variant preprocessing:
-        - Variant 1: Upscaled raw BGR
-        - Variant 2: Grayscale + CLAHE + subtle unsharp masking for crisp text edges
-        - Variant 3: Otsu adaptive binarization
-        - Variant 4: Inverted Otsu binarization
+        Upscales plate crop (3x-4x) and produces high-contrast variants:
+        - Variant 1: Clean Otsu binarization on gray (optimal for Tesseract PSM 8)
+        - Variant 2: Inverted Otsu binarization
+        - Variant 3: CLAHE sharpened grayscale
+        - Variant 4: Upscaled raw BGR
         """
         if plate_crop is None or plate_crop.size == 0:
             return []
 
         ph, pw = plate_crop.shape[:2]
-        # Choose dynamic practical scale factor: upscale small plates up to ~300px width
-        scale = 3 if pw < 120 else (2 if pw < 220 else 1)
-        if scale > 1:
-            upscaled = cv2.resize(plate_crop, (pw * scale, ph * scale), interpolation=cv2.INTER_CUBIC)
-        else:
-            upscaled = plate_crop.copy()
+        scale = 4 if pw < 80 else (3 if pw < 160 else 2)
+        upscaled = cv2.resize(plate_crop, (pw * scale, ph * scale), interpolation=cv2.INTER_CUBIC)
 
-        variants = [upscaled]
+        gray = cv2.cvtColor(upscaled, cv2.COLOR_BGR2GRAY)
+
+        # Primary: Otsu threshold directly on gray
+        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         # Contrast enhancement & sharpening
-        gray = cv2.cvtColor(upscaled, cv2.COLOR_BGR2GRAY)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
         enhanced = clahe.apply(gray)
         blurred = cv2.GaussianBlur(enhanced, (0, 0), 1.0)
         sharpened = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
-        variants.append(sharpened)
+        _, otsu_sharp = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # Otsu thresholding
-        _, otsu = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        variants.append(otsu)
-        variants.append(255 - otsu)
+        # Adaptive thresholding for night plates with glare or non-uniform illumination
+        adaptive_thresh = cv2.adaptiveThreshold(
+            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+        )
 
-        return variants
+        return [otsu, 255 - otsu, otsu_sharp, adaptive_thresh, sharpened, upscaled]
 
     def clean_and_validate_plate_text(self, raw_text: str) -> Tuple[Optional[str], float, str]:
         """
@@ -302,8 +313,24 @@ class ANPREngine:
         if cleaned.startswith("IND"):
             cleaned = cleaned[3:]
 
+        # Strip leading plate-frame / rivet artifact if following 2 chars match Indian state
+        if len(cleaned) > 10 and cleaned[1:3] in INDIAN_STATE_CODES:
+            cleaned = cleaned[1:]
+        elif len(cleaned) > 11 and cleaned[2:4] in INDIAN_STATE_CODES:
+            cleaned = cleaned[2:]
+
+        # Correct common optical confusion on state code (first 2 chars)
+        if len(cleaned) >= 2:
+            s_pref = cleaned[:2]
+            if s_pref in ("XA", "RA", "HA"):
+                cleaned = "KA" + cleaned[2:]
+            elif s_pref in ("OL", "QL", "QI"):
+                cleaned = "DL" + cleaned[2:]
+            elif s_pref == "NH":
+                cleaned = "MH" + cleaned[2:]
+
         alpha_map = {"0": "O", "1": "I", "2": "Z", "5": "S", "8": "B", "6": "G", "4": "A"}
-        digit_map = {"O": "0", "D": "0", "Q": "0", "I": "1", "L": "1", "Z": "2", "S": "5", "B": "8", "G": "6", "A": "4"}
+        digit_map = {"O": "0", "D": "0", "Q": "0", "I": "1", "L": "1", "T": "1", "Z": "2", "S": "5", "B": "8", "G": "6", "A": "4"}
 
         chars = list(cleaned)
         n = len(chars)
@@ -337,7 +364,6 @@ class ANPREngine:
                         chars[i] = digit_map[chars[i]]
             # 5. 11-character plate with trailing screw / border notch artifact
             elif n == 11:
-                # Often ends with stray '4', '1', '7' from plate screw/border
                 chars_trimmed = chars[:10]
                 for i in [4, 5]:
                     if chars_trimmed[i] in alpha_map:
@@ -361,19 +387,24 @@ class ANPREngine:
         if 8 <= len(normalized) <= 10:
             score += 10.0
         # High confidence bonus for recognized Indian state prefix
-        if len(normalized) >= 2 and normalized[:2] in INDIAN_STATE_CODES:
+        is_valid_state = len(normalized) >= 2 and normalized[:2] in INDIAN_STATE_CODES
+        if is_valid_state:
             score += 13.0
 
         confidence = round(min(98.5, score), 1)
-        status = "READABLE" if confidence >= 75.0 else ("UNCERTAIN" if len(normalized) >= 5 else "UNREADABLE")
-        return normalized, confidence, status
+        status = "READABLE" if (confidence >= 75.0 and is_valid_state) else ("UNCERTAIN" if len(normalized) >= 5 else "UNREADABLE")
+
+        # Format with spaces for display if 10 chars (e.g. KA 02 MH 7256)
+        formatted = f"{normalized[:2]} {normalized[2:4]} {normalized[4:6]} {normalized[6:]}" if (len(normalized) == 10 and is_valid_state) else normalized
+
+        return formatted, confidence, status
 
     def recognize_plate(self, plate_crop: np.ndarray) -> Tuple[Optional[str], float, str, str]:
         """
         Runs multi-pass OCR on plate crop using local OCR engines:
-        1. Local Tesseract (ultra-fast 10-15ms, PSM 7, alphanumeric whitelist).
-        2. EasyOCR fallback if Tesseract confidence is insufficient.
-        3. Auxiliary CRNN fallback.
+        1. Local Tesseract (ultra-fast PSM 8 on clean Otsu upscaled crop).
+        2. Alternative PSM 7 and sharpened variants.
+        3. EasyOCR fallback if Tesseract confidence is insufficient.
         Returns: (best_text, best_confidence, status, raw_ocr_text)
         """
         if plate_crop is None or plate_crop.size == 0:
@@ -387,35 +418,37 @@ class ANPREngine:
 
         # --- Pass 1: Local Tesseract OCR ---
         if self.tesseract_available:
-            for v_img in variants:
-                try:
-                    raw = self.pytesseract.image_to_string(
-                        v_img,
-                        config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                    ).strip()
-                    if raw:
-                        txt, conf, st = self.clean_and_validate_plate_text(raw)
-                        if conf > best_conf:
-                            best_conf = conf
-                            best_text = txt
-                            best_status = st
-                            raw_winner = raw
-                except Exception as e:
-                    logger.debug(f"[ANPREngine] Tesseract pass error: {e}")
+            for psm in [8, 7]:
+                tess_cfg = f"--psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                for v_img in variants:
+                    try:
+                        raw = self.pytesseract.image_to_string(v_img, config=tess_cfg).strip()
+                        if raw:
+                            txt, conf, st = self.clean_and_validate_plate_text(raw)
+                            if conf > best_conf:
+                                best_conf = conf
+                                best_text = txt
+                                best_status = st
+                                raw_winner = raw
+                                if conf >= 85.0 and st == "READABLE":
+                                    return best_text, best_conf, best_status, raw_winner
+                    except Exception as e:
+                        logger.debug(f"[ANPREngine] Tesseract pass error (psm {psm}): {e}")
+                if best_conf >= 80.0 and best_status == "READABLE":
+                    break
 
-        # If Tesseract achieved high confidence, return immediately for maximum speed
-        if best_conf >= 85.0 and best_text:
+        if best_conf >= 80.0 and best_status == "READABLE":
             return best_text, best_conf, best_status, raw_winner
 
         # --- Pass 2: EasyOCR Local Fallback ---
         reader = self._get_easyocr_reader()
-        if reader is not None and (best_conf < 85.0):
-            for v_img in variants[:2]:  # Test upscaled raw and sharpened
+        if reader is not None and (best_conf < 75.0 or best_status != "READABLE"):
+            # Test upscaled raw and sharpened variants
+            for v_img in variants[-2:]:
                 try:
                     res = reader.readtext(v_img)
                     for _, text, prob in res:
                         txt, conf, st = self.clean_and_validate_plate_text(text)
-                        # Blend model probability with syntax confidence
                         blended_conf = round(conf * 0.7 + prob * 30.0, 1)
                         if blended_conf > best_conf:
                             best_conf = blended_conf
@@ -424,20 +457,6 @@ class ANPREngine:
                             raw_winner = text
                 except Exception as e:
                     logger.debug(f"[ANPREngine] EasyOCR pass error: {e}")
-
-        # --- Pass 3: CRNN auxiliary fallback ---
-        if self.crnn_model is not None and (best_conf < 70.0):
-            try:
-                resized = cv2.resize(variants[0], (100, 32), interpolation=cv2.INTER_CUBIC)
-                raw = self.crnn_model.recognize(resized)
-                txt, conf, st = self.clean_and_validate_plate_text(raw)
-                if conf > best_conf:
-                    best_conf = conf
-                    best_text = txt
-                    best_status = st
-                    raw_winner = raw
-            except Exception:
-                pass
 
         return best_text, best_conf, best_status, raw_winner
 
@@ -455,7 +474,7 @@ class ANPREngine:
         1. Crop vehicle bounding box from frame.
         2. Locate license plate candidate in bumper ROI.
         3. Upscale & preprocess plate crop.
-        4. Run real local OCR.
+        4. Run real local OCR with temporal track caching.
         5. Apply confidence-weighted temporal consensus per vehicle Track ID.
         6. Produce structured runtime debug logging.
         """
@@ -464,8 +483,19 @@ class ANPREngine:
 
         if cache_key and not force_refresh:
             cached = self.track_plate_cache.get(cache_key)
-            if cached and (now - cached["timestamp"]) < self.cache_ttl_seconds:
-                return cached["result"]
+            if cached:
+                # If this track already has a confirmed READABLE plate, immediately reuse it
+                if cached["result"].get("plate_status") == "READABLE" and (cached["result"].get("plate_confidence") or 0) >= 75.0:
+                    return cached["result"]
+                if (now - cached["timestamp"]) < self.cache_ttl_seconds:
+                    return cached["result"]
+
+            # Throttle failed attempts on non-facing or unreadable vehicles
+            attempts = self.track_attempt_counts.get(cache_key, 0)
+            if attempts >= 3 and (attempts % 8 != 0):
+                self.track_attempt_counts[cache_key] = attempts + 1
+                if cached:
+                    return cached["result"]
 
         h, w = frame_bgr.shape[:2]
         x1 = max(0, int((vehicle_bbox.get("x", 0.0) / 100.0) * w))
@@ -565,22 +595,22 @@ class ANPREngine:
 
         attempts = self.track_attempt_counts.get(cache_key, 1) if cache_key else 1
 
-        # Determine Final Status:
-        # - READABLE: Valid plate text confirmed with high confidence (>= 80%) or multiple matching votes
-        # - READING: Candidate plate detected, but accumulating frames for confirmation
-        # - UNREADABLE: Multiple frames analyzed without achieving readable characters
-        if stable_winner and stable_winner["confirmed"]:
+        if plate_text and confidence >= 65.0:
+            final_status = "READABLE"
+            final_text = plate_text
+            final_conf = confidence
+        elif stable_winner and stable_winner["confirmed"]:
             final_status = "READABLE"
             final_text = stable_winner["text"]
             final_conf = stable_winner["confidence"]
-        elif attempts < 3 and (not stable_winner or not stable_winner["confirmed"]):
+        elif stable_winner and stable_winner.get("text"):
+            final_status = "READABLE"
+            final_text = stable_winner["text"]
+            final_conf = stable_winner["confidence"]
+        elif attempts <= 1:
             final_status = "READING"
             final_text = None
             final_conf = None
-        elif stable_winner and stable_winner["text"]:
-            final_status = "READABLE"
-            final_text = stable_winner["text"]
-            final_conf = stable_winner["confidence"]
         else:
             final_status = "UNREADABLE"
             final_text = None

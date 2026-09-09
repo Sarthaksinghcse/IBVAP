@@ -9,20 +9,22 @@ Architecture:
 """
 import logging
 from contextlib import asynccontextmanager
-import time
-import os
-import sys
-
-# Add project root to sys.path so backend can import ai_engine
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import os
+import sys
+_backend_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.dirname(_backend_dir)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 from database.init_db import init_db
-from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr, stream
-from websocket.manager import router as ws_router
+from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr
+from websocket.manager import router as ws_router, manager
 
 
 import os
@@ -41,7 +43,24 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 55)
     logger.info("  IBVAP Backend Starting…")
     logger.info("=" * 55)
+    import asyncio
+    manager.set_loop(asyncio.get_running_loop())
     init_db()
+
+    # Clean up stale video analysis jobs interrupted by server restart
+    try:
+        from database.database import SessionLocal
+        from models.models import Video
+        s = SessionLocal()
+        stuck_vids = s.query(Video).filter(Video.status.in_(["PROCESSING", "AI_ANALYZING"])).all()
+        for sv in stuck_vids:
+            sv.status = "ERROR"
+            logger.info(f"[Lifespan] Reset stale video analysis job {sv.id} to ERROR")
+        s.commit()
+        s.close()
+    except Exception as se:
+        logger.warning(f"[Lifespan] Failed checking stale video jobs: {se}")
+
     logger.info("  Backend ready. Docs: http://localhost:8000/docs")
     yield
     logger.info("  IBVAP Backend shutting down.")
@@ -57,43 +76,25 @@ app = FastAPI(
     lifespan    = lifespan,
 )
 
-# ─── Middleware ───────────────────────────────────────────────────────────────
-
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://localhost",
-        "http://localhost:8000",
-        "file://",              # Electron production (loads from file://)
-        "app://.",              # Electron custom protocol
-    ],
+    allow_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
+    allow_origins     = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"],
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
 )
 
-# ─── Static Files ────────────────────────────────────────────────────────────
-# Phase 0.2 (S2): Drop watchlist/ out of the static mount.
-# Watchlist photos are served through GET /api/watchlist/{person_id}/photo
-# with a permission check. Videos served through API route as well.
-# Only snapshots stay static for now.
+# ─── Static Files (uploaded videos + snapshots + watchlist photos) ───────────
 
 STORAGE_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage")
 os.makedirs(os.path.join(STORAGE_ROOT, "videos"),    exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots"), exist_ok=True)
-os.makedirs(os.path.join(STORAGE_ROOT, "snapshots", "faces"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "watchlist"), exist_ok=True)
-os.makedirs(os.path.join(STORAGE_ROOT, "users"), exist_ok=True)
 
-# Static mounts for media and snapshots
-app.mount("/storage/snapshots", StaticFiles(directory=os.path.join(STORAGE_ROOT, "snapshots")), name="snapshots")
-app.mount("/storage/watchlist", StaticFiles(directory=os.path.join(STORAGE_ROOT, "watchlist")), name="watchlist")
-app.mount("/storage/users",     StaticFiles(directory=os.path.join(STORAGE_ROOT, "users")),     name="users")
+app.mount("/storage", StaticFiles(directory=STORAGE_ROOT), name="storage")
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
 
@@ -104,55 +105,46 @@ app.include_router(alerts.router,     prefix="/api/alerts",     tags=["Alerts"])
 app.include_router(analytics.router,  prefix="/api/analytics",  tags=["Analytics"])
 app.include_router(zones.router,      prefix="/api/zones",      tags=["Zones"])
 app.include_router(watchlist.router,  prefix="/api/watchlist",  tags=["Watchlist"])
-app.include_router(anpr.router,       prefix="/api/anpr",       tags=["ANPR"])
-app.include_router(stream.router,     prefix="/api/stream",     tags=["stream"])
+app.include_router(anpr.router,       tags=["ANPR"])
 app.include_router(ws_router)
 
 
 
-# ─── Health & System Endpoints ───────────────────────────────────────────────
+# ─── Health Endpoints ─────────────────────────────────────────────────────────
 
 @app.get("/", tags=["Health"])
 def root():
     return {
-        "service": "SHIELD Backend",
-        "version": "2.0.0",
+        "service": "IBVAP Backend",
+        "version": "1.0.0",
         "status":  "online",
         "docs":    "/docs",
     }
 
 @app.get("/health", tags=["Health"])
+@app.get("/api/health", tags=["Health"])
 def health():
-    return {"status": "ok"}
+    db_ok = False
+    try:
+        from database.database import SessionLocal
+        from sqlalchemy import text
+        s = SessionLocal()
+        s.execute(text("SELECT 1"))
+        s.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
 
-def _find_models_dir() -> str:
-    candidates = [
-        os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")),
-        os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "models")),
-        os.path.normpath(os.path.join(os.getcwd(), "models")),
-        os.path.normpath(r"C:\Users\thaku\OneDrive\Desktop\IBVAP\models"),
-    ]
-    for c in candidates:
-        if os.path.exists(c) and os.path.isdir(c):
-            return c
-    return candidates[0]
+    model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "yolov8n.pt")
+    yolo_ok = os.path.exists(model_path)
 
-@app.get("/api/system/status", tags=["System"])
-def system_status():
-    models_dir = _find_models_dir()
-    yolo_exists = os.path.exists(os.path.join(models_dir, "yolov8n.pt"))
-    face_exists = os.path.exists(os.path.join(models_dir, "face_recognition_sface_2021dec.onnx"))
-    anpr_exists = os.path.exists(os.path.join(models_dir, "text_recognition_CRNN_EN_2021sep.onnx"))
+    tesseract_ok = os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+
     return {
-        "backend_status": "ONLINE",
-        "ai_engine_status": "RUNNING" if yolo_exists else "ERROR",
-        "database_status": "OK",
-        "model_name": "YOLOv8n + ByteTrack",
-        "models": {
-            "yolov8": yolo_exists,
-            "face_recognition": face_exists,
-            "anpr": anpr_exists,
-        },
-        "fps": 25.0,
-        "processing_time_ms": 42.0,
+        "status": "healthy" if db_ok and yolo_ok else "degraded",
+        "api": "online",
+        "database": "connected" if db_ok else "error",
+        "yolo_model": "ready" if yolo_ok else "missing",
+        "tesseract_ocr": "installed" if tesseract_ok else "not_found",
+        "active_ws_clients": len(manager.active_connections) if hasattr(manager, "active_connections") else 0,
     }

@@ -143,7 +143,9 @@ export function MultiCameraGrid({
 
             {/* Webcam Real YOLO Detections */}
             {settings.showBoundingBoxes &&
-              webcamDetections.map((det) => (
+              webcamDetections
+                .filter((d) => d?.bbox && typeof d.bbox.x === 'number' && typeof d.bbox.y === 'number' && typeof d.bbox.w === 'number' && typeof d.bbox.h === 'number')
+                .map((det) => (
                 <div
                   key={det.id}
                   className={`absolute border-2 pointer-events-none z-15 ${
@@ -162,7 +164,7 @@ export function MultiCameraGrid({
                     }`}
                   >
                     <span>{det.object_id}</span>
-                    {settings.showConfidence && <span>• {det.confidence}%</span>}
+                    {settings.showConfidence && <span>• {typeof det.confidence === 'number' ? det.confidence.toFixed(1) : det.confidence}%</span>}
                     {det.is_in_restricted_zone && <span className="text-[7px]">🚨 ZONE</span>}
                   </div>
                 </div>
@@ -289,7 +291,9 @@ export function MultiCameraGrid({
 
               {/* Camera-Specific YOLO Bounding Boxes */}
               {settings.showBoundingBoxes &&
-                camDets.map((det) => (
+                camDets
+                  .filter((d) => d?.bbox && typeof d.bbox.x === 'number' && typeof d.bbox.y === 'number' && typeof d.bbox.w === 'number' && typeof d.bbox.h === 'number')
+                  .map((det) => (
                   <div
                     key={det.id}
                     className={`absolute border-2 pointer-events-none z-15 ${
@@ -308,7 +312,7 @@ export function MultiCameraGrid({
                       }`}
                     >
                       <span>{det.object_id}</span>
-                      {settings.showConfidence && <span>• {det.confidence}%</span>}
+                      {settings.showConfidence && <span>• {typeof det.confidence === 'number' ? det.confidence.toFixed(1) : det.confidence}%</span>}
                       {det.is_in_restricted_zone && <span className="text-[7px]">🚨 ZONE</span>}
                     </div>
                   </div>

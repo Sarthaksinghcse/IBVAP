@@ -81,6 +81,9 @@ interface IBVAPState {
   activeVideoId: string | null;
   uploadedVideoName: string | null;
   pendingVideoBlob: string | null;
+  enhancedVideoUrl: string | null;
+  isLowLightVideo: boolean;
+  videoViewMode: 'ENHANCED' | 'ORIGINAL';
   videoAnalysisMetrics: {
     progress: number;
     currentFrame: number;
@@ -90,6 +93,10 @@ interface IBVAPState {
     tracks: number;
     events: number;
     status: string;
+    low_light?: boolean;
+    brightness?: number;
+    raw_video_url?: string | null;
+    enhanced_video_url?: string | null;
   } | null;
   timeZone: string;
   timeFormat: '12h' | '24h';
@@ -103,6 +110,9 @@ interface IBVAPState {
   setTheme: (theme: 'dark' | 'light' | 'system') => void;
   markAlertRead: (id: string) => void;
   markAllAlertsRead: () => void;
+  setEnhancedVideoUrl: (url: string | null) => void;
+  setIsLowLightVideo: (v: boolean) => void;
+  setVideoViewMode: (mode: 'ENHANCED' | 'ORIGINAL') => void;
   setVideoAnalysisMetrics: (metrics: Partial<{
     progress: number;
     currentFrame: number;
@@ -112,6 +122,10 @@ interface IBVAPState {
     tracks: number;
     events: number;
     status: string;
+    low_light?: boolean;
+    brightness?: number;
+    raw_video_url?: string | null;
+    enhanced_video_url?: string | null;
   }> | null) => void;
 
 
@@ -226,27 +240,47 @@ export const useStore = create<IBVAPState>((set, get) => ({
   uploadProgress: 0,
   uploadStatus: null,
   activeVideoUrl: null,
-  activeVideoId: null,
-  uploadedVideoName: null,
+  activeVideoId: (() => {
+    try { return localStorage.getItem('shield_active_video_id') || null; } catch { return null; }
+  })(),
+  uploadedVideoName: (() => {
+    try { return localStorage.getItem('shield_uploaded_video_name') || null; } catch { return null; }
+  })(),
   pendingVideoBlob: null,
+  enhancedVideoUrl: null,
+  isLowLightVideo: false,
+  videoViewMode: 'ENHANCED',
   videoAnalysisMetrics: null,
 
+  setEnhancedVideoUrl: (enhancedVideoUrl) => set({ enhancedVideoUrl }),
+  setIsLowLightVideo: (isLowLightVideo) => set({ isLowLightVideo }),
+  setVideoViewMode: (videoViewMode) => set({ videoViewMode }),
 
   setVideoAnalysisMetrics: (metrics) => {
-    set((state) => ({
-      videoAnalysisMetrics: metrics
-        ? {
-            progress: metrics.progress ?? state.videoAnalysisMetrics?.progress ?? 0,
-            currentFrame: metrics.currentFrame ?? state.videoAnalysisMetrics?.currentFrame ?? 0,
-            totalFrames: metrics.totalFrames ?? state.videoAnalysisMetrics?.totalFrames ?? 0,
-            fps: metrics.fps ?? state.videoAnalysisMetrics?.fps ?? 25.0,
-            detections: metrics.detections ?? state.videoAnalysisMetrics?.detections ?? 0,
-            tracks: metrics.tracks ?? state.videoAnalysisMetrics?.tracks ?? 0,
-            events: metrics.events ?? state.videoAnalysisMetrics?.events ?? 0,
-            status: metrics.status ?? state.videoAnalysisMetrics?.status ?? 'PROCESSING',
-          }
-        : null,
-    }));
+    set((state) => {
+      const low_light = metrics?.low_light ?? state.videoAnalysisMetrics?.low_light ?? false;
+      const enhanced_url = metrics?.enhanced_video_url ?? state.videoAnalysisMetrics?.enhanced_video_url ?? null;
+      return {
+        isLowLightVideo: low_light,
+        enhancedVideoUrl: enhanced_url ?? state.enhancedVideoUrl,
+        videoAnalysisMetrics: metrics
+          ? {
+              progress: metrics.progress ?? state.videoAnalysisMetrics?.progress ?? 0,
+              currentFrame: metrics.currentFrame ?? state.videoAnalysisMetrics?.currentFrame ?? 0,
+              totalFrames: metrics.totalFrames ?? state.videoAnalysisMetrics?.totalFrames ?? 0,
+              fps: metrics.fps ?? state.videoAnalysisMetrics?.fps ?? 25.0,
+              detections: metrics.detections ?? state.videoAnalysisMetrics?.detections ?? 0,
+              tracks: metrics.tracks ?? state.videoAnalysisMetrics?.tracks ?? 0,
+              events: metrics.events ?? state.videoAnalysisMetrics?.events ?? 0,
+              status: metrics.status ?? state.videoAnalysisMetrics?.status ?? 'PROCESSING',
+              low_light: low_light,
+              brightness: metrics.brightness ?? state.videoAnalysisMetrics?.brightness ?? 0.0,
+              raw_video_url: metrics.raw_video_url ?? state.videoAnalysisMetrics?.raw_video_url ?? null,
+              enhanced_video_url: enhanced_url,
+            }
+          : null,
+      };
+    });
   },
 
   timeZone: (() => {
@@ -420,7 +454,7 @@ export const useStore = create<IBVAPState>((set, get) => ({
     })),
 
   // --- Detection Actions ---
-  setDetections: (detections) => set({ detections }),
+  setDetections: (detections) => set({ detections: (detections || []).slice(0, 500) }),
   addDetection: (detection) =>
     set((state) => ({
       detections: [detection, ...state.detections].slice(0, 500),
@@ -521,8 +555,20 @@ export const useStore = create<IBVAPState>((set, get) => ({
   setUploadProgress: (uploadProgress) => set({ uploadProgress }),
   setUploadStatus: (uploadStatus) => set({ uploadStatus }),
   setActiveVideoUrl: (activeVideoUrl) => set({ activeVideoUrl }),
-  setActiveVideoId: (activeVideoId) => set({ activeVideoId }),
-  setUploadedVideoName: (uploadedVideoName) => set({ uploadedVideoName }),
+  setActiveVideoId: (activeVideoId) => {
+    try {
+      if (activeVideoId) localStorage.setItem('shield_active_video_id', activeVideoId);
+      else localStorage.removeItem('shield_active_video_id');
+    } catch {}
+    set({ activeVideoId });
+  },
+  setUploadedVideoName: (uploadedVideoName) => {
+    try {
+      if (uploadedVideoName) localStorage.setItem('shield_uploaded_video_name', uploadedVideoName);
+      else localStorage.removeItem('shield_uploaded_video_name');
+    } catch {}
+    set({ uploadedVideoName });
+  },
   setPendingVideoBlob: (pendingVideoBlob) => set({ pendingVideoBlob }),
 
   // --- Browser Camera Actions ---

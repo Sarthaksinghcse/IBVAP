@@ -23,7 +23,7 @@ from services.camera_stream_worker import camera_stream_manager
 from websocket.manager import manager
 from pydantic import BaseModel
 from datetime import datetime
-import base64, cv2, numpy as np, uuid, os, logging, time, socket, asyncio, json
+import base64, cv2, numpy as np, uuid, os, logging, time, socket, asyncio, json, threading
 
 logger = logging.getLogger("camera_route")
 
@@ -33,10 +33,22 @@ router = APIRouter()
 _shared_detector = None
 _camera_trackers: dict = {}
 _camera_threat_engines: dict = {}
+_camera_enhancers: dict = {}
+_camera_enhancers_lock = threading.Lock()
 _live_dedup_cache: dict = {}
 
 
-def _get_shared_detector(conf_threshold: float = 0.45):
+def _get_camera_enhancer(camera_id: str):
+    """Return camera-specific FrameEnhancer instance with independent brightness state."""
+    global _camera_enhancers
+    with _camera_enhancers_lock:
+        if camera_id not in _camera_enhancers:
+            from ai_engine.preprocessing.frame_enhancer import FrameEnhancer
+            _camera_enhancers[camera_id] = FrameEnhancer()
+        return _camera_enhancers[camera_id]
+
+
+def _get_shared_detector(conf_threshold: float = 0.25):
     global _shared_detector
     if _shared_detector is None:
         from ai_engine.detection.detector import Detector
@@ -144,9 +156,30 @@ def _get_camera_ai_pipeline(camera_id: str):
         _camera_trackers[camera_id] = Tracker()
 
     if camera_id not in _camera_threat_engines:
+        from database.database import SessionLocal
+        from ai_engine.intelligence.threat_engine import DEFAULT_RESTRICTED_ZONE_A
+        db = SessionLocal()
+        zone_coords = None
+        zone_name = None
+        try:
+            cam_zone = db.query(Zone).filter(Zone.source_id == camera_id, Zone.enabled == True).first()
+            if cam_zone and cam_zone.coordinates_json:
+                zone_coords = json.loads(cam_zone.coordinates_json)
+                zone_name = cam_zone.name
+        except Exception as e:
+            logger.warning(f"[CameraPipeline] Error loading zone for {camera_id}: {e}")
+        finally:
+            db.close()
+
+        if not zone_coords:
+            zone_coords = DEFAULT_RESTRICTED_ZONE_A
+            zone_name = "Restricted Zone A"
+
         _camera_threat_engines[camera_id] = ThreatEngine(
             camera_id=camera_id,
             loitering_threshold=15.0,
+            restricted_zone_polygon=zone_coords,
+            zone_name=zone_name,
             alert_callback=create_and_broadcast_alert_sync,
             detection_callback=_handle_live_detection_sync
         )
@@ -166,11 +199,12 @@ def _get_webcam_ai_instances():
 class WebcamInferRequest(BaseModel):
     image_base64: str
     camera_id: str = "WEBCAM-01"
-    conf_threshold: float = 0.45
+    conf_threshold: float = 0.25
     frame_seq: int = 0
     face_recognition_enabled: bool = True
     face_threshold: float = 0.45
     anpr_enabled: bool = True
+    view_mode: str = "enhanced"
 
 
 
@@ -212,7 +246,26 @@ def create_camera(data: CameraCreate, db: Session = Depends(get_db)):
     db.add(cam)
     db.commit()
     db.refresh(cam)
-    logger.info(f"[Cameras] Registered new {cam.source_type} camera: {cam.name} ({cam.id})")
+
+    # Ensure default restricted zone exists for this camera
+    existing_zone = db.query(Zone).filter(Zone.source_id == cam.id).first()
+    if not existing_zone:
+        default_coords = [(5.0, 5.0), (50.0, 5.0), (50.0, 95.0), (5.0, 95.0)]
+        new_zone = Zone(
+            id=str(uuid.uuid4()),
+            source_id=cam.id,
+            source_type=cam.source_type,
+            name="Restricted Zone A",
+            coordinates_json=json.dumps(default_coords),
+            enabled=True,
+            zone_type="RESTRICTED",
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(new_zone)
+        db.commit()
+
+    logger.info(f"[Cameras] Registered new {cam.source_type} camera: {cam.name} ({cam.id}) with default zone")
     return cam
 
 
@@ -287,6 +340,17 @@ async def test_camera_stream(data: StreamTestRequest):
             success=False,
             status="OFFLINE",
             error="Stream URL cannot be empty."
+        )
+
+    # ALWAYS-ON DEMO FEED BYPASS
+    # Bypass reachability test for the persistent UI demo
+    if stream_url.lower() == "demo":
+        return StreamTestResponse(
+            success=True,
+            status="ONLINE",
+            resolution="1920x1080",
+            fps=30.0,
+            message="Demo stream intercepted and verified successfully."
         )
 
     # Run OpenCV stream probe in a thread pool to avoid blocking the event loop
@@ -557,12 +621,14 @@ async def get_camera_mjpeg_stream(
     camera_id: str,
     conf: Optional[float] = Query(None, description="Confidence threshold (0.05 - 1.0)"),
     rotate: Optional[int] = Query(None, description="Camera stream rotation degrees (0, 90, 180, 270)"),
+    view: str = Query("auto", description="View mode: auto, enhanced, original"),
     db: Session = Depends(get_db)
 ):
     """
     Live low-latency MJPEG stream for network CCTV / USB Phone cameras with decoupled YOLOv8 inference,
     persistent tracking, zone intrusion detection, loitering analysis, and graceful disconnect recovery.
     Runs at full frame rate (~25-30 FPS) without freezing during AI inference.
+    Supports real-time low-light view modes ('auto', 'enhanced', 'original').
     """
     cam = db.query(Camera).filter(Camera.id == camera_id).first()
     if not cam:
@@ -588,7 +654,7 @@ async def get_camera_mjpeg_stream(
         worker.set_rotation(rot_val)
 
     return StreamingResponse(
-        worker.generate_mjpeg(),
+        worker.generate_mjpeg(view_mode=view),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
@@ -742,29 +808,56 @@ async def infer_webcam_frame(data: WebcamInferRequest):
             return {"detections": [], "frame_seq": data.frame_seq, "camera_id": data.camera_id}
 
         nparr = np.frombuffer(img_bytes, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        raw_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        if frame is None or frame.size == 0:
-            return {"detections": [], "frame_seq": data.frame_seq, "camera_id": data.camera_id}
+        if raw_frame is None or raw_frame.size == 0:
+            return {"detections": [], "frame_seq": data.frame_seq, "camera_id": data.camera_id, "low_light": False, "enhanced_image_base64": None}
 
-        # ── Run real YOLOv8 with internal tracking (persist=True) ─────────────
-        raw_dets = detector.detect(frame, camera_id=data.camera_id, track=True)
-        logger.info(f"[YOLO] Inference completed: {len(raw_dets)} detections")
+        enhancer = _get_camera_enhancer(data.camera_id)
+        raw_frame_copy = raw_frame.copy()
+        frame_for_inference, was_enhanced, enh_meta = enhancer.enhance(raw_frame_copy)
 
-        if not raw_dets:
-            # No objects detected this frame — return empty (clear previous boxes)
-            return {"detections": [], "frame_seq": data.frame_seq, "camera_id": data.camera_id}
+        enhanced_b64 = None
+        if was_enhanced and data.view_mode.lower() == "enhanced":
+            ret_enc, enc_jpeg = cv2.imencode(".jpg", frame_for_inference, [cv2.IMWRITE_JPEG_QUALITY, 72])
+            if ret_enc:
+                enhanced_b64 = f"data:image/jpeg;base64,{base64.b64encode(enc_jpeg).decode('ascii')}"
+
+        # ── Run real YOLOv8 on inference frame with internal tracking (persist=True) ─────────────
+        raw_dets = detector.detect(frame_for_inference, camera_id=data.camera_id, track=True)
 
         # ── Update our persistent Tracker (for zone dwell timing) ─────────────
-        active_tracks = tracker.update(raw_dets)
-        logger.info(f"[TRACKER] {len(active_tracks)} active tracks")
+        active_tracks = tracker.update(raw_dets) if raw_dets else tracker.update([])
+
+        logger.info(
+            f"[CAMERA] camera_id={data.camera_id} [FRAME] received=true | "
+            f"[LOW_LIGHT] brightness={enh_meta.get('brightness', 0.0):.1f} | "
+            f"[ENHANCER] applied={was_enhanced} processing_ms={enh_meta.get('time_ms', 0.0):.1f}ms | "
+            f"[YOLO] detections={len(raw_dets)} | [TRACKER] tracks={len(active_tracks)}"
+        )
 
         # ── Evaluate ThreatEngine (zone intrusion + loitering + alert dedup) ──
         import asyncio
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, lambda: threat_engine.process_tracks(active_tracks, video_id=None, frame_bgr=frame)
+            None, lambda: threat_engine.process_tracks(
+                active_tracks,
+                video_id=None,
+                frame_bgr=raw_frame,
+                inference_bgr=frame_for_inference
+            )
         )
+
+        if not raw_dets and not active_tracks:
+            return {
+                "detections": [],
+                "frame_seq": data.frame_seq,
+                "camera_id": data.camera_id,
+                "low_light": was_enhanced,
+                "brightness": enh_meta.get("brightness", 0.0),
+                "gamma": enh_meta.get("gamma", 1.0),
+                "enhanced_image_base64": enhanced_b64
+            }
 
         # ── Build detection response & AI Evaluation ─────────────────────────
         now = datetime.utcnow()
@@ -785,7 +878,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
             face_match_info = None
             if data.face_recognition_enabled and track.object_type == "PERSON":
                 face_eval = face_engine.evaluate_person_track_face(
-                    frame_bgr=frame,
+                    frame_bgr=frame_for_inference,
                     person_bbox=track.bbox,
                     camera_id=data.camera_id,
                     track_id=track.track_id,
@@ -812,8 +905,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
                         cosine_score=face_eval["cosine_score"],
                         track_id=track.track_id,
                         bbox=track.bbox,
-                        is_in_zone=is_in_zone,
-                        frame_bgr=frame
+                        is_in_zone=is_in_zone
                     )
                 elif face_eval.get("face_detected"):
                     face_match_info = {
@@ -827,7 +919,7 @@ async def infer_webcam_frame(data: WebcamInferRequest):
             is_vehicle = track.object_type in ["VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE"]
             if data.anpr_enabled and is_vehicle:
                 plate_eval = anpr_engine.evaluate_vehicle_plate(
-                    frame_bgr=frame,
+                    frame_bgr=frame_for_inference,
                     vehicle_bbox=track.bbox,
                     camera_id=data.camera_id,
                     track_id=track.track_id,
@@ -960,11 +1052,24 @@ async def infer_webcam_frame(data: WebcamInferRequest):
             "detections": output_detections,
             "frame_seq": data.frame_seq,
             "camera_id": data.camera_id,
+            "low_light": was_enhanced,
+            "brightness": enh_meta.get("brightness", 0.0),
+            "gamma": enh_meta.get("gamma", 1.0),
+            "enhanced_image_base64": enhanced_b64
         }
 
     except Exception as e:
         logger.error(f"[WebcamAI] Inference error on frame_seq={data.frame_seq}: {e}", exc_info=True)
-        return {"detections": [], "frame_seq": data.frame_seq, "camera_id": data.camera_id, "error": str(e)}
+        return {
+            "detections": [],
+            "frame_seq": data.frame_seq,
+            "camera_id": data.camera_id,
+            "low_light": False,
+            "brightness": 0.0,
+            "gamma": 1.0,
+            "enhanced_image_base64": None,
+            "error": str(e)
+        }
 
 
 

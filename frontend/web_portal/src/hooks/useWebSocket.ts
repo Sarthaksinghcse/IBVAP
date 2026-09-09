@@ -87,6 +87,30 @@ export function useWebSocket() {
           addDetection(det);
           break;
         }
+        case 'ANPR_EVENT': {
+          const anpr = msg.data as any;
+          if (anpr) {
+            addDetection({
+              id: anpr.id || `anpr-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+              camera_id: anpr.camera_id,
+              video_id: anpr.video_id,
+              object_type: anpr.vehicle_type || 'VEHICLE',
+              object_id: anpr.vehicle_label || `Vehicle Track #${anpr.vehicle_track_id}`,
+              confidence: anpr.plate_confidence || 85.0,
+              event_type: anpr.plate_status === 'READABLE' ? 'PLATE_DETECTED' : 'UNREADABLE_PLATE',
+              bbox: anpr.bbox || { x: 0, y: 0, w: 0, h: 0 },
+              timestamp: anpr.timestamp || new Date().toISOString(),
+              video_time_sec: anpr.video_time_sec,
+              plate_info: {
+                plate_detected: true,
+                plate_text: anpr.plate_text,
+                plate_confidence: anpr.plate_confidence,
+                plate_status: anpr.plate_status,
+              }
+            });
+          }
+          break;
+        }
         case 'SYSTEM':
           setSystemStatus(msg.data as Parameters<typeof setSystemStatus>[0]);
           break;
