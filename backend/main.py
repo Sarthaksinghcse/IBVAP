@@ -23,7 +23,7 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from database.init_db import init_db
-from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr
+from routes import cameras, detections, alerts, videos, analytics, zones, watchlist, anpr, stream
 from websocket.manager import router as ws_router, manager
 
 
@@ -81,7 +81,16 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
-    allow_origins     = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"],
+    allow_origins     = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://localhost",
+        "http://localhost:8000",
+        "file://",              # Electron production (loads from file://)
+        "app://.",              # Electron custom protocol
+    ],
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
@@ -92,7 +101,9 @@ app.add_middleware(
 STORAGE_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage")
 os.makedirs(os.path.join(STORAGE_ROOT, "videos"),    exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "snapshots"), exist_ok=True)
+os.makedirs(os.path.join(STORAGE_ROOT, "snapshots", "faces"), exist_ok=True)
 os.makedirs(os.path.join(STORAGE_ROOT, "watchlist"), exist_ok=True)
+os.makedirs(os.path.join(STORAGE_ROOT, "users"), exist_ok=True)
 
 app.mount("/storage", StaticFiles(directory=STORAGE_ROOT), name="storage")
 
@@ -106,6 +117,7 @@ app.include_router(analytics.router,  prefix="/api/analytics",  tags=["Analytics
 app.include_router(zones.router,      prefix="/api/zones",      tags=["Zones"])
 app.include_router(watchlist.router,  prefix="/api/watchlist",  tags=["Watchlist"])
 app.include_router(anpr.router,       tags=["ANPR"])
+app.include_router(stream.router,     prefix="/api/stream",     tags=["stream"])
 app.include_router(ws_router)
 
 

@@ -10,6 +10,9 @@ import sys
 import time
 import argparse
 import logging
+import threading
+import requests
+import numpy as np
 from typing import Optional
 
 # Setup sys.path so modules can be run directly
@@ -22,6 +25,8 @@ import cv2
 from ai_engine.detection.detector import Detector
 from ai_engine.tracking.tracker import Tracker
 from ai_engine.intelligence.threat_engine import ThreatEngine
+from ai_engine.intelligence.face_engine import get_face_engine
+from ai_engine.intelligence.face_config import MATCH_THRESHOLD_STRICT, MIN_FACE_PX
 from ai_engine.preprocessing.frame_enhancer import FrameEnhancer
 
 # Configure Logging
@@ -31,6 +36,60 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 logger = logging.getLogger("pipeline")
+
+
+class WatchlistSync:
+    """
+    Phase 2.1: Watchlist Sync Helper.
+    Polls the backend for watchlist version changes and updates local embedding templates.
+    """
+    def __init__(self, backend_url: str):
+        self.backend_url = backend_url
+        self.records = []
+        self.version = -1
+        self._lock = threading.Lock()
+        self._running = True
+
+        # Initial sync
+        self._sync()
+
+        # Background poller
+        self._thread = threading.Thread(target=self._poll, daemon=True)
+        self._thread.start()
+
+    def _sync(self):
+        try:
+            r = requests.get(f"{self.backend_url}/api/watchlist/version", timeout=5)
+            if r.status_code == 200:
+                ver = r.json().get("version", -1)
+                if ver > self.version:
+                    r2 = requests.get(f"{self.backend_url}/api/watchlist/embeddings", timeout=10)
+                    if r2.status_code == 200:
+                        data = r2.json()
+                        with self._lock:
+                            self.records = [
+                                {
+                                    "person_id": rec["person_id"],
+                                    "name": rec["name"],
+                                    "identifier": rec.get("identifier"),
+                                    "threat_priority": rec.get("threat_priority", "HIGH"),
+                                    "embedding": np.array(rec["embedding"], dtype=np.float32)
+                                }
+                                for rec in data.get("records", [])
+                            ]
+                            self.version = data.get("version", ver)
+                        logger.info(f"[WatchlistSync] Synced version {self.version} with {len(self.records)} records.")
+        except Exception as e:
+            logger.warning(f"[WatchlistSync] Sync failed (backend unreachable?): {e}")
+
+    def _poll(self):
+        while self._running:
+            time.sleep(15.0)
+            self._sync()
+
+    def get_records(self):
+        with self._lock:
+            return self.records
 
 
 class IBVAPPipeline:
@@ -75,6 +134,11 @@ class IBVAPPipeline:
             backend_url=backend_url,
             loitering_threshold=loitering_threshold
         )
+
+        # Phase 2.2: Live face recognition against the watchlist
+        self.face_eval_interval_frames = 5
+        self.watchlist = WatchlistSync(backend_url)
+        self.face_engine = get_face_engine()
 
     def _open_capture(self) -> cv2.VideoCapture:
         """Open video file or camera stream."""
@@ -130,6 +194,51 @@ class IBVAPPipeline:
                 # 2. Update Persistent Track Objects
                 active_tracks = self.tracker.update(detections)
 
+                # 2b. Live face recognition against the watchlist.
+                # Recognition runs on the enhanced inference frame (so low-light footage benefits
+                # from the enhancer); evidence snapshots still use the untouched raw frame.
+                face_ms = 0.0
+                watchlist_records = self.watchlist.get_records()
+
+                if watchlist_records:
+                    face_start = time.time()
+                    for track in active_tracks:
+                        if track.object_type != "PERSON":
+                            continue
+
+                        # Early out on tracks too small to yield a usable face crop
+                        if track.bbox.get("h", 0) < (MIN_FACE_PX / 0.15):
+                            continue
+
+                        # Budget the cost: stagger evaluation across frames by track id
+                        if (frame_idx % self.face_eval_interval_frames) != (track.track_id % self.face_eval_interval_frames):
+                            continue
+
+                        result = self.face_engine.evaluate_person_track_face(
+                            frame_bgr=frame_for_inference,
+                            person_bbox=track.bbox,
+                            camera_id=self.camera_id,
+                            track_id=track.track_id,
+                            watchlist_records=watchlist_records,
+                            threshold=MATCH_THRESHOLD_STRICT
+                        )
+
+                        if result.get("is_match") and result.get("consensus_state") == "CONFIRMED":
+                            self.threat_engine.trigger_watchlist_alert(
+                                person_id=result["person_id"],
+                                person_name=result["person_name"],
+                                identifier=result.get("identifier"),
+                                threat_priority=result.get("threat_priority", "HIGH"),
+                                similarity=result["similarity"],
+                                cosine_score=result["cosine_score"],
+                                track_id=track.track_id,
+                                bbox=track.bbox,
+                                is_in_zone=track.in_zone,
+                                video_id=self.video_id
+                            )
+
+                    face_ms = (time.time() - face_start) * 1000
+
                 # 3. Threat Engine Analysis & Event Dispatching (raw_frame preserved for snapshots/evidence)
                 processed_dets = self.threat_engine.process_tracks(
                     active_tracks,
@@ -153,7 +262,7 @@ class IBVAPPipeline:
                         f"[Frame {frame_idx:04d}/{total_frames or 'Live'}] "
                         f"[LOW_LIGHT] brightness={enh_meta['brightness']} enhancement={was_enhanced} | "
                         f"FPS: {curr_fps:.1f} | Detections: [{summary_str}] | "
-                        f"Active Tracks: {len(active_tracks)} | Zone A: {zone_count}"
+                        f"Active Tracks: {len(active_tracks)} | Zone A: {zone_count} | Face ms: {face_ms:.1f}"
                     )
 
                 # 5. Throttle loop if pacing is desired
@@ -167,6 +276,10 @@ class IBVAPPipeline:
             logger.info("[Pipeline] Interrupted by user.")
         finally:
             cap.release()
+            try:
+                self.face_engine.clear_cache()
+            except Exception as fe:
+                logger.warning(f"[Pipeline] Face engine scope cleanup failed: {fe}")
             total_time = time.time() - start_time
             logger.info(f"[Pipeline] Processing Complete. Processed {processed_count} frames in {total_time:.2f}s ({processed_count/total_time:.1f} avg FPS).")
 
